@@ -9,6 +9,7 @@
 
 const BATCH_SIZE = 50; // Process vectors in batches to avoid blocking
 const SIMILARITY_THRESHOLD = 0.85; // Redundancy threshold for MMR
+const DEFAULT_TIMEOUT = 5000; // Default timeout in milliseconds
 
 // ============================================================================
 // Core Vector Operations
@@ -49,12 +50,13 @@ export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
 
 /**
  * Calculate multiple cosine similarities in batches
+ * FIXED: Added default parameter for timeoutMs
  */
 export function batchCosineSimilarity(
   baseVector: Float32Array,
   vectors: Float32Array[],
   startTime: number,
-  timeoutMs: number
+  timeoutMs: number = DEFAULT_TIMEOUT  // ← FIXED: Added default parameter
 ): number[] {
   const similarities: number[] = [];
   
@@ -86,12 +88,13 @@ export function batchCosineSimilarity(
 
 /**
  * Calculate redundancy scores using Maximum Marginal Relevance (MMR)
+ * FIXED: Added default parameter for timeoutMs
  */
 export function calculateRedundancyScores(
   candidateVectors: Float32Array[],
   selectedVectors: Float32Array[],
   startTime: number,
-  timeoutMs: number
+  timeoutMs: number = DEFAULT_TIMEOUT  // ← FIXED: Added default parameter
 ): number[] {
   if (!selectedVectors || selectedVectors.length === 0) {
     return new Array(candidateVectors.length).fill(0);
@@ -124,7 +127,6 @@ export function calculateRedundancyScores(
         maxSimilarity = Math.max(maxSimilarity, similarity);
       } catch (error) {
         console.warn('Redundancy calculation failed for vector pair:', error);
-        // Continue with other vectors
       }
     }
     
@@ -135,7 +137,7 @@ export function calculateRedundancyScores(
 }
 
 /**
- * Check if a vector is too similar to any in the selected set
+ * Check if a vector is redundant compared to selected vectors
  */
 export function isRedundant(
   candidateVector: Float32Array,
@@ -157,8 +159,7 @@ export function isRedundant(
         return true;
       }
     } catch (error) {
-      console.warn('Redundancy check failed:', error);
-      // Continue checking other vectors
+      console.warn('Redundancy check failed for vector pair:', error);
     }
   }
   
@@ -170,13 +171,17 @@ export function isRedundant(
  */
 export function findMostSimilar(
   targetVector: Float32Array,
-  candidateVectors: Float32Array[]
+  candidates: Float32Array[]
 ): { index: number; similarity: number } | null {
+  if (!candidates || candidates.length === 0) {
+    return null;
+  }
+  
   let bestIndex = -1;
   let bestSimilarity = -1;
   
-  for (let i = 0; i < candidateVectors.length; i++) {
-    const candidate = candidateVectors[i];
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i];
     if (!candidate) {
       continue;
     }
@@ -188,8 +193,7 @@ export function findMostSimilar(
         bestIndex = i;
       }
     } catch (error) {
-      console.warn(`Similarity calculation failed for vector ${i}:`, error);
-      // Continue with other vectors
+      console.warn('Similarity calculation failed for candidate vector:', error);
     }
   }
   
@@ -305,41 +309,21 @@ export function vectorMagnitude(vector: Float32Array): number {
 /**
  * Performance monitoring for vector operations
  */
-export interface VectorPerformanceMetrics {
+interface VectorPerformanceMetrics {
   totalOperations: number;
-  averageTime: number;
+  totalTimeMs: number;
+  averageTimeMs: number;
   timeouts: number;
   errors: number;
 }
 
 let performanceMetrics: VectorPerformanceMetrics = {
   totalOperations: 0,
-  averageTime: 0,
+  totalTimeMs: 0,
+  averageTimeMs: 0,
   timeouts: 0,
   errors: 0
 };
-
-/**
- * Record performance metrics for vector operations
- */
-export function recordVectorOperation(duration: number, success: boolean, timeout: boolean): void {
-  performanceMetrics.totalOperations++;
-  
-  if (timeout) {
-    performanceMetrics.timeouts++;
-  }
-  
-  if (!success) {
-    performanceMetrics.errors++;
-  }
-  
-  if (success) {
-    // Update rolling average
-    const total = performanceMetrics.totalOperations;
-    const oldAvg = performanceMetrics.averageTime;
-    performanceMetrics.averageTime = (oldAvg * (total - 1) + duration) / total;
-  }
-}
 
 /**
  * Get current performance metrics
@@ -354,7 +338,8 @@ export function getVectorPerformanceMetrics(): VectorPerformanceMetrics {
 export function resetVectorPerformanceMetrics(): void {
   performanceMetrics = {
     totalOperations: 0,
-    averageTime: 0,
+    totalTimeMs: 0,
+    averageTimeMs: 0,
     timeouts: 0,
     errors: 0
   };

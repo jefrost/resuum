@@ -1,482 +1,372 @@
 /**
- * Recommendation Algorithm Implementation
- * Core logic for project ranking, bullet selection, and quality scoring
+ * Vector Mathematics for Recommendation Engine
+ * Handles all vector operations with performance monitoring and error handling
  */
 
-import { 
-    cosineSimilarity, 
-    isRedundant, 
-    recordVectorOperation 
-  } from './vector-math';
-  
-  // ============================================================================
-  // Types and Interfaces
-  // ============================================================================
-  
-  export interface AlgorithmWeights {
-    relevance: number;        // α - relevance to job description
-    quality: number;          // μ - quality features score
-    recency: number;          // ρ - recency bias
-    redundancyPenalty: number; // λ - redundancy penalty
+// ============================================================================
+// Constants and Configuration
+// ============================================================================
+
+const BATCH_SIZE = 50; // Process vectors in batches to avoid blocking
+const SIMILARITY_THRESHOLD = 0.85; // Redundancy threshold for MMR
+const DEFAULT_TIMEOUT = 5000; // Default timeout in milliseconds
+
+// ============================================================================
+// Core Vector Operations
+// ============================================================================
+
+/**
+ * Calculate cosine similarity between two vectors
+ */
+export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+  if (!a || !b || a.length !== b.length) {
+    throw new Error('Vector dimensions must match and vectors must be defined');
   }
   
-  export interface QualityFeatures {
-    hasNumbers: boolean;
-    actionVerb: boolean;
-    lengthOk: boolean;
-  }
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
   
-  export interface ProjectScore {
-    projectId: string;
-    score: number;
-    similarity: number;
-    recencyFactor: number;
-  }
-  
-  export interface BulletScore {
-    bulletId: string;
-    score: number;
-    relevance: number;
-    qualityScore: number;
-    redundancyScore: number;
-  }
-  
-  export interface ProjectData {
-    id: string;
-    centroidVector: Float32Array;
-    recencyFactor: number;
-  }
-  
-  export interface BulletData {
-    id: string;
-    projectId: string;
-    vector: Float32Array;
-    qualityFeatures: QualityFeatures;
-  }
-  
-  // ============================================================================
-  // Algorithm Timing Constants
-  // ============================================================================
-  
-  export const TIMING_BUDGETS = {
-    SELECTION_PHASE: 1000, // 1s hard cap for selection
-    VECTOR_OPERATION: 100, // 100ms per vector operation batch
-    PROJECT_RANKING: 200,  // 200ms for project ranking
-    BULLET_SELECTION: 500  // 500ms for bullet selection
-  } as const;
-  
-  // ============================================================================
-  // Quality Scoring Functions
-  // ============================================================================
-  
-  /**
-   * Calculate quality score based on bullet features
-   */
-  export function calculateQualityScore(features: QualityFeatures, weights: AlgorithmWeights): number {
-    let score = 0;
+  for (let i = 0; i < a.length; i++) {
+    const valueA = a[i];
+    const valueB = b[i];
     
-    if (features.hasNumbers) {
-      score += 0.20; // Quantified results bonus
+    // Handle undefined values (shouldn't happen with Float32Array but being safe)
+    if (valueA !== undefined && valueB !== undefined && !isNaN(valueA) && !isNaN(valueB)) {
+      dotProduct += valueA * valueB;
+      normA += valueA * valueA;
+      normB += valueB * valueB;
+    }
+  }
+  
+  const denominator = Math.sqrt(normA) * Math.sqrt(normB);
+  
+  if (denominator === 0) {
+    return 0;
+  }
+  
+  return dotProduct / denominator;
+}
+
+/**
+ * Calculate multiple cosine similarities in batches
+ * FIXED: Added default parameter for timeoutMs
+ */
+export function batchCosineSimilarity(
+  baseVector: Float32Array,
+  vectors: Float32Array[],
+  startTime: number,
+  timeoutMs: number = DEFAULT_TIMEOUT  // ← FIXED: Added default parameter
+): number[] {
+  const similarities: number[] = [];
+  
+  for (let i = 0; i < vectors.length; i += BATCH_SIZE) {
+    // Check timeout
+    if (Date.now() - startTime > timeoutMs) {
+      throw new Error(`Operation timeout after ${timeoutMs}ms`);
     }
     
-    if (features.actionVerb) {
-      score += 0.10; // Strong action verb bonus
-    }
+    const batch = vectors.slice(i, i + BATCH_SIZE);
     
-    if (features.lengthOk) {
-      score += 0.05; // Appropriate length bonus
-    }
-    
-    // Cap total quality bonus at 0.35
-    return Math.min(score, 0.35) * weights.quality;
-  }
-  
-  /**
-   * Calculate recency factor based on role order and time
-   */
-  export function calculateRecencyFactor(
-    roleOrderIndex: number,
-    totalRoles: number,
-    startDate?: string,
-    endDate?: string
-  ): number {
-    // Base recency on role order (most recent = 0)
-    const roleRecency = totalRoles > 1 ? (totalRoles - roleOrderIndex) / totalRoles : 1.0;
-    
-    // Add time-based recency if dates available
-    if (startDate) {
-      try {
-        const endTime = endDate ? new Date(endDate) : new Date();
-        const now = new Date();
-        
-        const monthsSinceEnd = (now.getTime() - endTime.getTime()) / (1000 * 60 * 60 * 24 * 30);
-        const timeRecency = Math.max(0, 1 - monthsSinceEnd / 60); // Decay over 5 years
-        
-        return (roleRecency + timeRecency) / 2;
-      } catch (error) {
-        console.warn('Invalid date format in recency calculation:', error);
-        return roleRecency;
-      }
-    }
-    
-    return roleRecency;
-  }
-  
-  // ============================================================================
-  // Project Ranking Algorithm
-  // ============================================================================
-  
-  /**
-   * Rank projects by relevance to job description
-   */
-  export function rankProjects(
-    jobVector: Float32Array,
-    projects: ProjectData[],
-    weights: AlgorithmWeights,
-    startTime: number
-  ): ProjectScore[] {
-    const timeoutMs = TIMING_BUDGETS.PROJECT_RANKING;
-    const scores: ProjectScore[] = [];
-    
-    for (const project of projects) {
-      // Check timeout
-      if (Date.now() - startTime > timeoutMs) {
-        throw new Error(`Project ranking timeout after ${timeoutMs}ms`);
-      }
-      
-      // Validate project data
-      if (!project.id || !project.centroidVector) {
-        console.warn('Skipping invalid project:', project.id);
+    for (const vector of batch) {
+      if (!vector) {
+        similarities.push(0);
         continue;
       }
       
       try {
-        const similarity = cosineSimilarity(jobVector, project.centroidVector);
-        const score = weights.relevance * similarity + weights.recency * project.recencyFactor;
-        
-        scores.push({
-          projectId: project.id,
-          score,
-          similarity,
-          recencyFactor: project.recencyFactor
-        });
+        similarities.push(cosineSimilarity(baseVector, vector));
       } catch (error) {
-        console.warn(`Failed to score project ${project.id}:`, error);
-        recordVectorOperation(Date.now() - startTime, false, false);
-        // Continue with other projects
+        console.warn('Similarity calculation failed for vector:', error);
+        similarities.push(0);
       }
     }
-    
-    // Sort by score (highest first)
-    return scores.sort((a, b) => b.score - a.score);
   }
   
-  /**
-   * Create project shortlist based on ranking and limits
-   */
-  export function createProjectShortlist(
-    projectScores: ProjectScore[],
-    roleLimit: number,
-    minProjects: number = 3,
-    maxProjects: number = 8
-  ): string[] {
-    // M = clamp(3, 8, 2×roleLimit) as specified in PRD
-    const shortlistSize = Math.min(maxProjects, Math.max(minProjects, 2 * roleLimit));
-    
-    return projectScores
-      .slice(0, shortlistSize)
-      .map(p => p.projectId);
+  return similarities;
+}
+
+/**
+ * Calculate redundancy scores using Maximum Marginal Relevance (MMR)
+ * FIXED: Added default parameter for timeoutMs
+ */
+export function calculateRedundancyScores(
+  candidateVectors: Float32Array[],
+  selectedVectors: Float32Array[],
+  startTime: number,
+  timeoutMs: number = DEFAULT_TIMEOUT  // ← FIXED: Added default parameter
+): number[] {
+  if (!selectedVectors || selectedVectors.length === 0) {
+    return new Array(candidateVectors.length).fill(0);
   }
   
-  // ============================================================================
-  // Bullet Selection Algorithm
-  // ============================================================================
+  const redundancyScores: number[] = [];
   
-  /**
-   * Score bullets for selection
-   */
-  export function scoreBullets(
-    jobVector: Float32Array,
-    bullets: BulletData[],
-    weights: AlgorithmWeights,
-    startTime: number
-  ): Array<{
-    bullet: BulletData;
-    relevance: number;
-    qualityScore: number;
-    combinedScore: number;
-  }> {
-    const timeoutMs = TIMING_BUDGETS.BULLET_SELECTION;
-    const scoredBullets: Array<{
-      bullet: BulletData;
-      relevance: number;
-      qualityScore: number;
-      combinedScore: number;
-    }> = [];
+  for (let i = 0; i < candidateVectors.length; i++) {
+    // Check timeout
+    if (Date.now() - startTime > timeoutMs) {
+      throw new Error(`Redundancy calculation timeout after ${timeoutMs}ms`);
+    }
     
-    for (const bullet of bullets) {
-      // Check timeout
-      if (Date.now() - startTime > timeoutMs) {
-        throw new Error(`Bullet scoring timeout after ${timeoutMs}ms`);
+    const candidate = candidateVectors[i];
+    if (!candidate) {
+      redundancyScores.push(0);
+      continue;
+    }
+    
+    let maxSimilarity = 0;
+    
+    // Find maximum similarity to any selected vector
+    for (const selected of selectedVectors) {
+      if (!selected) {
+        continue;
       }
       
       try {
-        const relevance = cosineSimilarity(jobVector, bullet.vector);
-        const qualityScore = calculateQualityScore(bullet.qualityFeatures, weights);
-        const combinedScore = relevance * weights.relevance + qualityScore;
-        
-        scoredBullets.push({
-          bullet,
-          relevance,
-          qualityScore,
-          combinedScore
-        });
+        const similarity = cosineSimilarity(candidate, selected);
+        maxSimilarity = Math.max(maxSimilarity, similarity);
       } catch (error) {
-        console.warn(`Failed to score bullet ${bullet.id}:`, error);
-        recordVectorOperation(Date.now() - startTime, false, false);
-        // Continue with other bullets
+        console.warn('Redundancy calculation failed for vector pair:', error);
       }
     }
     
-    // Sort by combined score (highest first)
-    return scoredBullets.sort((a, b) => b.combinedScore - a.combinedScore);
+    redundancyScores.push(maxSimilarity);
   }
   
-  /**
-   * Select best bullets with MMR and constraints
-   */
-  export function selectBullets(
-    jobVector: Float32Array,
-    bullets: BulletData[],
-    projectShortlist: string[],
-    maxPerProject: number,
-    roleLimit: number,
-    weights: AlgorithmWeights,
-    startTime: number
-  ): BulletScore[] {
-    const timeoutMs = TIMING_BUDGETS.BULLET_SELECTION;
-    const selected: BulletScore[] = [];
-    const selectedVectors: Float32Array[] = [];
-    const projectCounts = new Map<string, number>();
-    
-    // Filter bullets to shortlisted projects
-    const candidateBullets = bullets.filter(bullet => 
-      bullet && bullet.id && bullet.projectId && 
-      projectShortlist.includes(bullet.projectId) &&
-      bullet.vector
-    );
-    
-    // Score all candidate bullets
-    const scoredBullets = scoreBullets(jobVector, candidateBullets, weights, startTime);
-    
-    // Select bullets with MMR and constraints
-    for (const item of scoredBullets) {
-      // Check timeout
-      if (Date.now() - startTime > timeoutMs) {
-        throw new Error(`MMR selection timeout after ${timeoutMs}ms`);
-      }
-      
-      // Stop if we've reached role limit
-      if (selected.length >= roleLimit) {
-        break;
-      }
-      
-      // Check per-project limit
-      const projectCount = projectCounts.get(item.bullet.projectId) || 0;
-      if (projectCount >= maxPerProject) {
-        continue;
-      }
-      
-      // Check redundancy using MMR threshold (0.85 as specified)
-      if (isRedundant(item.bullet.vector, selectedVectors, 0.85)) {
-        continue;
-      }
-      
-      // Calculate redundancy score for final scoring
-      let redundancyScore = 0;
-      if (selectedVectors.length > 0) {
-        try {
-          redundancyScore = Math.max(
-            ...selectedVectors.map(selected => 
-              cosineSimilarity(item.bullet.vector, selected)
-            )
-          );
-        } catch (error) {
-          console.warn('Redundancy calculation failed:', error);
-          redundancyScore = 0;
-        }
-      }
-      
-      // Calculate final score with redundancy penalty
-      const finalScore = 
-        item.combinedScore - 
-        redundancyScore * weights.redundancyPenalty;
-      
-      // Accept bullet
-      selected.push({
-        bulletId: item.bullet.id,
-        score: finalScore,
-        relevance: item.relevance,
-        qualityScore: item.qualityScore,
-        redundancyScore
-      });
-      
-      selectedVectors.push(item.bullet.vector);
-      projectCounts.set(item.bullet.projectId, projectCount + 1);
+  return redundancyScores;
+}
+
+/**
+ * Check if a vector is redundant compared to selected vectors
+ */
+export function isRedundant(
+  candidateVector: Float32Array,
+  selectedVectors: Float32Array[],
+  threshold: number = SIMILARITY_THRESHOLD
+): boolean {
+  if (!selectedVectors || selectedVectors.length === 0) {
+    return false;
+  }
+  
+  for (const selected of selectedVectors) {
+    if (!selected) {
+      continue;
     }
-    
-    return selected;
-  }
-  
-  // ============================================================================
-  // Main Recommendation Function
-  // ============================================================================
-  
-  /**
-   * Generate complete recommendations
-   */
-  export function generateRecommendations(
-    jobVector: Float32Array,
-    projects: ProjectData[],
-    bullets: BulletData[],
-    roleLimit: number,
-    maxPerProject: number,
-    weights: AlgorithmWeights
-  ): {
-    projectScores: ProjectScore[];
-    selectedBullets: BulletScore[];
-    processingTime: number;
-  } {
-    const startTime = Date.now();
     
     try {
-      // Validate input data
-      if (!jobVector || !projects || !bullets || !weights) {
-        throw new Error('Missing required data for recommendation');
+      const similarity = cosineSimilarity(candidateVector, selected);
+      if (similarity >= threshold) {
+        return true;
       }
-      
-      // Phase 1: Project ranking
-      const projectScores = rankProjects(jobVector, projects, weights, startTime);
-      
-      // Phase 2: Create shortlist
-      const projectShortlist = createProjectShortlist(projectScores, roleLimit);
-      
-      // Phase 3: Bullet selection
-      const selectedBullets = selectBullets(
-        jobVector,
-        bullets,
-        projectShortlist,
-        maxPerProject,
-        roleLimit,
-        weights,
-        startTime
-      );
-      
-      const processingTime = Date.now() - startTime;
-      recordVectorOperation(processingTime, true, false);
-      
-      return {
-        projectScores: projectScores.slice(0, projectShortlist.length),
-        selectedBullets,
-        processingTime
-      };
-      
     } catch (error) {
-      const processingTime = Date.now() - startTime;
-      const isTimeout = error instanceof Error && error.message.includes('timeout');
-      recordVectorOperation(processingTime, false, isTimeout);
-      
-      throw new Error(`Recommendation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      console.warn('Redundancy check failed for vector pair:', error);
     }
   }
   
-  // ============================================================================
-  // Algorithm Validation
-  // ============================================================================
-  
-  /**
-   * Validate algorithm inputs
-   */
-  export function validateRecommendationInputs(
-    jobVector: Float32Array,
-    projects: ProjectData[],
-    bullets: BulletData[],
-    roleLimit: number,
-    maxPerProject: number,
-    weights: AlgorithmWeights
-  ): { isValid: boolean; errors: string[] } {
-    const errors: string[] = [];
-    
-    // Validate job vector
-    if (!jobVector || jobVector.length === 0) {
-      errors.push('Job vector is required and must not be empty');
-    }
-    
-    // Validate projects
-    if (!projects || projects.length === 0) {
-      errors.push('At least one project is required');
-    } else {
-      for (const project of projects) {
-        if (!project.id) {
-          errors.push('All projects must have an ID');
-        }
-        if (!project.centroidVector || project.centroidVector.length === 0) {
-          errors.push(`Project ${project.id} missing centroid vector`);
-        }
-        if (project.centroidVector && jobVector && project.centroidVector.length !== jobVector.length) {
-          errors.push(`Project ${project.id} vector dimension mismatch`);
-        }
-      }
-    }
-    
-    // Validate bullets
-    if (!bullets || bullets.length === 0) {
-      errors.push('At least one bullet is required');
-    } else {
-      for (const bullet of bullets) {
-        if (!bullet.id) {
-          errors.push('All bullets must have an ID');
-        }
-        if (!bullet.projectId) {
-          errors.push(`Bullet ${bullet.id} missing project ID`);
-        }
-        if (!bullet.vector || bullet.vector.length === 0) {
-          errors.push(`Bullet ${bullet.id} missing vector`);
-        }
-        if (bullet.vector && jobVector && bullet.vector.length !== jobVector.length) {
-          errors.push(`Bullet ${bullet.id} vector dimension mismatch`);
-        }
-      }
-    }
-    
-    // Validate limits
-    if (roleLimit <= 0) {
-      errors.push('Role limit must be positive');
-    }
-    if (maxPerProject <= 0) {
-      errors.push('Max per project must be positive');
-    }
-    
-    // Validate weights
-    if (!weights) {
-      errors.push('Algorithm weights are required');
-    } else {
-      if (weights.relevance < 0 || weights.relevance > 1) {
-        errors.push('Relevance weight must be between 0 and 1');
-      }
-      if (weights.quality < 0 || weights.quality > 1) {
-        errors.push('Quality weight must be between 0 and 1');
-      }
-      if (weights.recency < 0 || weights.recency > 1) {
-        errors.push('Recency weight must be between 0 and 1');
-      }
-      if (weights.redundancyPenalty < 0 || weights.redundancyPenalty > 1) {
-        errors.push('Redundancy penalty must be between 0 and 1');
-      }
-    }
-    
-    return {
-      isValid: errors.length === 0,
-      errors
-    };
+  return false;
+}
+
+/**
+ * Find the most similar vector from a set
+ */
+export function findMostSimilar(
+  targetVector: Float32Array,
+  candidates: Float32Array[]
+): { index: number; similarity: number } | null {
+  if (!candidates || candidates.length === 0) {
+    return null;
   }
+  
+  let bestIndex = -1;
+  let bestSimilarity = -1;
+  
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i];
+    if (!candidate) {
+      continue;
+    }
+    
+    try {
+      const similarity = cosineSimilarity(targetVector, candidate);
+      if (similarity > bestSimilarity) {
+        bestSimilarity = similarity;
+        bestIndex = i;
+      }
+    } catch (error) {
+      console.warn('Similarity calculation failed for candidate vector:', error);
+    }
+  }
+  
+  return bestIndex >= 0 ? { index: bestIndex, similarity: bestSimilarity } : null;
+}
+
+/**
+ * Calculate vector centroid (mean vector)
+ */
+export function calculateCentroid(vectors: Float32Array[]): Float32Array | null {
+  if (!vectors || vectors.length === 0) {
+    return null;
+  }
+  
+  const validVectors = vectors.filter(v => v && v.length > 0);
+  if (validVectors.length === 0) {
+    return null;
+  }
+  
+  const firstVector = validVectors[0];
+  if (!firstVector) {
+    return null;
+  }
+  
+  const dimensions = firstVector.length;
+  const centroid = new Float32Array(dimensions);
+  
+  // Sum all vectors
+  for (const vector of validVectors) {
+    if (!vector || vector.length !== dimensions) {
+      console.warn('Vector dimension mismatch in centroid calculation');
+      continue;
+    }
+    
+    for (let i = 0; i < dimensions; i++) {
+      const value = vector[i];
+      const currentCentroid = centroid[i];
+      if (value !== undefined && !isNaN(value) && currentCentroid !== undefined) {
+        centroid[i] = currentCentroid + value;
+      }
+    }
+  }
+  
+  // Normalize by count
+  const count = validVectors.length;
+  for (let i = 0; i < dimensions; i++) {
+    const currentValue = centroid[i];
+    if (count > 0 && currentValue !== undefined) {
+      centroid[i] = currentValue / count;
+    }
+  }
+  
+  return centroid;
+}
+
+/**
+ * Normalize vector to unit length
+ */
+export function normalizeVector(vector: Float32Array): Float32Array {
+  if (!vector || vector.length === 0) {
+    throw new Error('Cannot normalize empty vector');
+  }
+  
+  const normalized = new Float32Array(vector.length);
+  let magnitude = 0;
+  
+  // Calculate magnitude
+  for (let i = 0; i < vector.length; i++) {
+    const value = vector[i];
+    if (value !== undefined && !isNaN(value)) {
+      magnitude += value * value;
+    }
+  }
+  
+  magnitude = Math.sqrt(magnitude);
+  
+  if (magnitude === 0) {
+    // Return zero vector if input is zero
+    return normalized;
+  }
+  
+  // Normalize
+  for (let i = 0; i < vector.length; i++) {
+    const value = vector[i];
+    const normalizedValue = normalized[i];
+    if (value !== undefined && !isNaN(value) && normalizedValue !== undefined) {
+      normalized[i] = value / magnitude;
+    }
+  }
+  
+  return normalized;
+}
+
+/**
+ * Calculate vector magnitude (Euclidean norm)
+ */
+export function vectorMagnitude(vector: Float32Array): number {
+  if (!vector || vector.length === 0) {
+    return 0;
+  }
+  
+  let sumSquares = 0;
+  for (let i = 0; i < vector.length; i++) {
+    const value = vector[i];
+    if (value !== undefined && !isNaN(value)) {
+      sumSquares += value * value;
+    }
+  }
+  
+  return Math.sqrt(sumSquares);
+}
+
+/**
+ * Performance monitoring for vector operations
+ */
+interface VectorPerformanceMetrics {
+  totalOperations: number;
+  totalTimeMs: number;
+  averageTimeMs: number;
+  timeouts: number;
+  errors: number;
+}
+
+let performanceMetrics: VectorPerformanceMetrics = {
+  totalOperations: 0,
+  totalTimeMs: 0,
+  averageTimeMs: 0,
+  timeouts: 0,
+  errors: 0
+};
+
+/**
+ * Get current performance metrics
+ */
+export function getVectorPerformanceMetrics(): VectorPerformanceMetrics {
+  return { ...performanceMetrics };
+}
+
+/**
+ * Reset performance metrics
+ */
+export function resetVectorPerformanceMetrics(): void {
+  performanceMetrics = {
+    totalOperations: 0,
+    totalTimeMs: 0,
+    averageTimeMs: 0,
+    timeouts: 0,
+    errors: 0
+  };
+}
+
+/**
+ * Record a vector operation for performance tracking
+ */
+export function recordVectorOperation(
+  duration: number, 
+  success: boolean, 
+  timeout: boolean = false
+): void {
+  performanceMetrics.totalOperations++;
+  
+  if (timeout) {
+    performanceMetrics.timeouts++;
+  }
+  
+  if (!success) {
+    performanceMetrics.errors++;
+  }
+  
+  if (success) {
+    const total = performanceMetrics.totalOperations;
+    const oldAvg = performanceMetrics.averageTimeMs;
+    performanceMetrics.averageTimeMs = (oldAvg * (total - 1) + duration) / total;
+    performanceMetrics.totalTimeMs += duration;
+  }
+}
