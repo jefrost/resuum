@@ -56,7 +56,7 @@
     ],
     "exclude": [
       "node_modules",
-      "dist",
+      "docs",
       "**/*.test.ts",
       "**/*.spec.ts"
     ]
