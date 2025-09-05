@@ -6,8 +6,6 @@
     <title>Resuum - AI-Powered Resume Optimization</title>
     <meta name="description" content="Transform resume customization from a 30-minute manual process to a 2-minute AI-assisted workflow">
     
-    <!-- CSP for single-file mode -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'unsafe-inline'; worker-src blob:; object-src 'none'; connect-src https://api.openai.com;">
     
     <style>
         * {
@@ -82,8 +80,613 @@
         // Create worker from inline code
         const workerBlob = new Blob([`"use strict";
 (() => {
+  // src/workers/vector-math.ts
+  var BATCH_SIZE = 50;
+  var SIMILARITY_THRESHOLD = 0.85;
+  function cosineSimilarity(a, b) {
+    if (!a || !b || a.length !== b.length) {
+      throw new Error("Vector dimensions must match and vectors must be defined");
+    }
+    let dotProduct = 0;
+    let normA = 0;
+    let normB = 0;
+    for (let i = 0; i < a.length; i++) {
+      const valueA = a[i];
+      const valueB = b[i];
+      if (valueA !== void 0 && valueB !== void 0 && !isNaN(valueA) && !isNaN(valueB)) {
+        dotProduct += valueA * valueB;
+        normA += valueA * valueA;
+        normB += valueB * valueB;
+      }
+    }
+    const denominator = Math.sqrt(normA) * Math.sqrt(normB);
+    if (denominator === 0) {
+      return 0;
+    }
+    return dotProduct / denominator;
+  }
+  function batchCosineSimilarity(baseVector, vectors, startTime, timeoutMs) {
+    const similarities = [];
+    for (let i = 0; i < vectors.length; i += BATCH_SIZE) {
+      if (Date.now() - startTime > timeoutMs) {
+        throw new Error(\`Operation timeout after ${timeoutMs}ms\`);
+      }
+      const batch = vectors.slice(i, i + BATCH_SIZE);
+      for (const vector of batch) {
+        if (!vector) {
+          similarities.push(0);
+          continue;
+        }
+        try {
+          similarities.push(cosineSimilarity(baseVector, vector));
+        } catch (error) {
+          console.warn("Similarity calculation failed for vector:", error);
+          similarities.push(0);
+        }
+      }
+    }
+    return similarities;
+  }
+  function calculateRedundancyScores(candidateVectors, selectedVectors, startTime, timeoutMs) {
+    if (!selectedVectors || selectedVectors.length === 0) {
+      return new Array(candidateVectors.length).fill(0);
+    }
+    const redundancyScores = [];
+    for (let i = 0; i < candidateVectors.length; i++) {
+      if (Date.now() - startTime > timeoutMs) {
+        throw new Error(\`Redundancy calculation timeout after ${timeoutMs}ms\`);
+      }
+      const candidate = candidateVectors[i];
+      if (!candidate) {
+        redundancyScores.push(0);
+        continue;
+      }
+      let maxSimilarity = 0;
+      for (const selected of selectedVectors) {
+        if (!selected) {
+          continue;
+        }
+        try {
+          const similarity = cosineSimilarity(candidate, selected);
+          maxSimilarity = Math.max(maxSimilarity, similarity);
+        } catch (error) {
+          console.warn("Redundancy calculation failed for vector pair:", error);
+        }
+      }
+      redundancyScores.push(maxSimilarity);
+    }
+    return redundancyScores;
+  }
+  function isRedundant(candidateVector, selectedVectors, threshold = SIMILARITY_THRESHOLD) {
+    if (!selectedVectors || selectedVectors.length === 0) {
+      return false;
+    }
+    for (const selected of selectedVectors) {
+      if (!selected) {
+        continue;
+      }
+      try {
+        const similarity = cosineSimilarity(candidateVector, selected);
+        if (similarity >= threshold) {
+          return true;
+        }
+      } catch (error) {
+        console.warn("Redundancy check failed:", error);
+      }
+    }
+    return false;
+  }
+  var performanceMetrics = {
+    totalOperations: 0,
+    averageTime: 0,
+    timeouts: 0,
+    errors: 0
+  };
+  function recordVectorOperation(duration, success, timeout) {
+    performanceMetrics.totalOperations++;
+    if (timeout) {
+      performanceMetrics.timeouts++;
+    }
+    if (!success) {
+      performanceMetrics.errors++;
+    }
+    if (success) {
+      const total = performanceMetrics.totalOperations;
+      const oldAvg = performanceMetrics.averageTime;
+      performanceMetrics.averageTime = (oldAvg * (total - 1) + duration) / total;
+    }
+  }
+  function getVectorPerformanceMetrics() {
+    return { ...performanceMetrics };
+  }
+  function resetVectorPerformanceMetrics() {
+    performanceMetrics = {
+      totalOperations: 0,
+      averageTime: 0,
+      timeouts: 0,
+      errors: 0
+    };
+  }
+
+  // src/workers/recommendation-algorithm.ts
+  var TIMING_BUDGETS = {
+    SELECTION_PHASE: 1e3,
+    // 1s hard cap for selection
+    VECTOR_OPERATION: 100,
+    // 100ms per vector operation batch
+    PROJECT_RANKING: 200,
+    // 200ms for project ranking
+    BULLET_SELECTION: 500
+    // 500ms for bullet selection
+  };
+  function calculateQualityScore(features, weights) {
+    let score = 0;
+    if (features.hasNumbers) {
+      score += 0.2;
+    }
+    if (features.actionVerb) {
+      score += 0.1;
+    }
+    if (features.lengthOk) {
+      score += 0.05;
+    }
+    return Math.min(score, 0.35) * weights.quality;
+  }
+  function rankProjects(jobVector, projects, weights, startTime) {
+    const timeoutMs = TIMING_BUDGETS.PROJECT_RANKING;
+    const scores = [];
+    for (const project of projects) {
+      if (Date.now() - startTime > timeoutMs) {
+        throw new Error(\`Project ranking timeout after ${timeoutMs}ms\`);
+      }
+      if (!project.id || !project.centroidVector) {
+        console.warn("Skipping invalid project:", project.id);
+        continue;
+      }
+      try {
+        const similarity = cosineSimilarity(jobVector, project.centroidVector);
+        const score = weights.relevance * similarity + weights.recency * project.recencyFactor;
+        scores.push({
+          projectId: project.id,
+          score,
+          similarity,
+          recencyFactor: project.recencyFactor
+        });
+      } catch (error) {
+        console.warn(\`Failed to score project ${project.id}:\`, error);
+        recordVectorOperation(Date.now() - startTime, false, false);
+      }
+    }
+    return scores.sort((a, b) => b.score - a.score);
+  }
+  function createProjectShortlist(projectScores, roleLimit, minProjects = 3, maxProjects = 8) {
+    const shortlistSize = Math.min(maxProjects, Math.max(minProjects, 2 * roleLimit));
+    return projectScores.slice(0, shortlistSize).map((p) => p.projectId);
+  }
+  function scoreBullets(jobVector, bullets, weights, startTime) {
+    const timeoutMs = TIMING_BUDGETS.BULLET_SELECTION;
+    const scoredBullets = [];
+    for (const bullet of bullets) {
+      if (Date.now() - startTime > timeoutMs) {
+        throw new Error(\`Bullet scoring timeout after ${timeoutMs}ms\`);
+      }
+      try {
+        const relevance = cosineSimilarity(jobVector, bullet.vector);
+        const qualityScore = calculateQualityScore(bullet.qualityFeatures, weights);
+        const combinedScore = relevance * weights.relevance + qualityScore;
+        scoredBullets.push({
+          bullet,
+          relevance,
+          qualityScore,
+          combinedScore
+        });
+      } catch (error) {
+        console.warn(\`Failed to score bullet ${bullet.id}:\`, error);
+        recordVectorOperation(Date.now() - startTime, false, false);
+      }
+    }
+    return scoredBullets.sort((a, b) => b.combinedScore - a.combinedScore);
+  }
+  function selectBullets(jobVector, bullets, projectShortlist, maxPerProject, roleLimit, weights, startTime) {
+    const timeoutMs = TIMING_BUDGETS.BULLET_SELECTION;
+    const selected = [];
+    const selectedVectors = [];
+    const projectCounts = /* @__PURE__ */ new Map();
+    const candidateBullets = bullets.filter(
+      (bullet) => bullet && bullet.id && bullet.projectId && projectShortlist.includes(bullet.projectId) && bullet.vector
+    );
+    const scoredBullets = scoreBullets(jobVector, candidateBullets, weights, startTime);
+    for (const item of scoredBullets) {
+      if (Date.now() - startTime > timeoutMs) {
+        throw new Error(\`MMR selection timeout after ${timeoutMs}ms\`);
+      }
+      if (selected.length >= roleLimit) {
+        break;
+      }
+      const projectCount = projectCounts.get(item.bullet.projectId) || 0;
+      if (projectCount >= maxPerProject) {
+        continue;
+      }
+      if (isRedundant(item.bullet.vector, selectedVectors, 0.85)) {
+        continue;
+      }
+      let redundancyScore = 0;
+      if (selectedVectors.length > 0) {
+        try {
+          redundancyScore = Math.max(
+            ...selectedVectors.map(
+              (selected2) => cosineSimilarity(item.bullet.vector, selected2)
+            )
+          );
+        } catch (error) {
+          console.warn("Redundancy calculation failed:", error);
+          redundancyScore = 0;
+        }
+      }
+      const finalScore = item.combinedScore - redundancyScore * weights.redundancyPenalty;
+      selected.push({
+        bulletId: item.bullet.id,
+        score: finalScore,
+        relevance: item.relevance,
+        qualityScore: item.qualityScore,
+        redundancyScore
+      });
+      selectedVectors.push(item.bullet.vector);
+      projectCounts.set(item.bullet.projectId, projectCount + 1);
+    }
+    return selected;
+  }
+  function generateRecommendations(jobVector, projects, bullets, roleLimit, maxPerProject, weights) {
+    const startTime = Date.now();
+    try {
+      if (!jobVector || !projects || !bullets || !weights) {
+        throw new Error("Missing required data for recommendation");
+      }
+      const projectScores = rankProjects(jobVector, projects, weights, startTime);
+      const projectShortlist = createProjectShortlist(projectScores, roleLimit);
+      const selectedBullets = selectBullets(
+        jobVector,
+        bullets,
+        projectShortlist,
+        maxPerProject,
+        roleLimit,
+        weights,
+        startTime
+      );
+      const processingTime = Date.now() - startTime;
+      recordVectorOperation(processingTime, true, false);
+      return {
+        projectScores: projectScores.slice(0, projectShortlist.length),
+        selectedBullets,
+        processingTime
+      };
+    } catch (error) {
+      const processingTime = Date.now() - startTime;
+      const isTimeout = error instanceof Error && error.message.includes("timeout");
+      recordVectorOperation(processingTime, false, isTimeout);
+      throw new Error(\`Recommendation failed: ${error instanceof Error ? error.message : "Unknown error"}\`);
+    }
+  }
+  function validateRecommendationInputs(jobVector, projects, bullets, roleLimit, maxPerProject, weights) {
+    const errors = [];
+    if (!jobVector || jobVector.length === 0) {
+      errors.push("Job vector is required and must not be empty");
+    }
+    if (!projects || projects.length === 0) {
+      errors.push("At least one project is required");
+    } else {
+      for (const project of projects) {
+        if (!project.id) {
+          errors.push("All projects must have an ID");
+        }
+        if (!project.centroidVector || project.centroidVector.length === 0) {
+          errors.push(\`Project ${project.id} missing centroid vector\`);
+        }
+        if (project.centroidVector && jobVector && project.centroidVector.length !== jobVector.length) {
+          errors.push(\`Project ${project.id} vector dimension mismatch\`);
+        }
+      }
+    }
+    if (!bullets || bullets.length === 0) {
+      errors.push("At least one bullet is required");
+    } else {
+      for (const bullet of bullets) {
+        if (!bullet.id) {
+          errors.push("All bullets must have an ID");
+        }
+        if (!bullet.projectId) {
+          errors.push(\`Bullet ${bullet.id} missing project ID\`);
+        }
+        if (!bullet.vector || bullet.vector.length === 0) {
+          errors.push(\`Bullet ${bullet.id} missing vector\`);
+        }
+        if (bullet.vector && jobVector && bullet.vector.length !== jobVector.length) {
+          errors.push(\`Bullet ${bullet.id} vector dimension mismatch\`);
+        }
+      }
+    }
+    if (roleLimit <= 0) {
+      errors.push("Role limit must be positive");
+    }
+    if (maxPerProject <= 0) {
+      errors.push("Max per project must be positive");
+    }
+    if (!weights) {
+      errors.push("Algorithm weights are required");
+    } else {
+      if (weights.relevance < 0 || weights.relevance > 1) {
+        errors.push("Relevance weight must be between 0 and 1");
+      }
+      if (weights.quality < 0 || weights.quality > 1) {
+        errors.push("Quality weight must be between 0 and 1");
+      }
+      if (weights.recency < 0 || weights.recency > 1) {
+        errors.push("Recency weight must be between 0 and 1");
+      }
+      if (weights.redundancyPenalty < 0 || weights.redundancyPenalty > 1) {
+        errors.push("Redundancy penalty must be between 0 and 1");
+      }
+    }
+    return {
+      isValid: errors.length === 0,
+      errors
+    };
+  }
+
+  // src/workers/worker-message-handler.ts
+  function handleVectorOperation(data) {
+    const startTime = Date.now();
+    if (!data.jobVector || !data.bulletVectors) {
+      throw new Error("Missing required vectors for operation");
+    }
+    try {
+      const similarities = batchCosineSimilarity(
+        data.jobVector,
+        data.bulletVectors,
+        startTime,
+        TIMING_BUDGETS.VECTOR_OPERATION
+      );
+      const redundancyScores = calculateRedundancyScores(
+        data.bulletVectors,
+        data.selectedVectors || [],
+        startTime,
+        TIMING_BUDGETS.VECTOR_OPERATION
+      );
+      return {
+        similarities,
+        redundancyScores,
+        processingTime: Date.now() - startTime
+      };
+    } catch (error) {
+      throw new Error(\`Vector operation failed: ${error instanceof Error ? error.message : "Unknown error"}\`);
+    }
+  }
+  function handleRecommendation(data) {
+    const validation = validateRecommendationInputs(
+      data.jobVector,
+      data.projects,
+      data.bullets,
+      data.roleLimit,
+      data.maxPerProject,
+      data.weights
+    );
+    if (!validation.isValid) {
+      throw new Error(\`Input validation failed: ${validation.errors.join(", ")}\`);
+    }
+    return generateRecommendations(
+      data.jobVector,
+      data.projects,
+      data.bullets,
+      data.roleLimit,
+      data.maxPerProject,
+      data.weights
+    );
+  }
+  function handleHealthCheck() {
+    const metrics = getVectorPerformanceMetrics();
+    return {
+      status: "healthy",
+      timestamp: Date.now(),
+      capabilities: ["vector_operation", "recommendation", "performance_reset"],
+      performance: metrics,
+      memoryUsage: {
+        used: performance.memory?.usedJSHeapSize || 0,
+        total: performance.memory?.totalJSHeapSize || 0
+      }
+    };
+  }
+  function handlePerformanceReset() {
+    resetVectorPerformanceMetrics();
+    return {
+      status: "reset",
+      timestamp: Date.now(),
+      message: "Performance metrics reset successfully"
+    };
+  }
+  function routeMessage(message) {
+    switch (message.type) {
+      case "vector_operation":
+        return handleVectorOperation(message.data);
+      case "recommendation":
+        return handleRecommendation(message.data);
+      case "health_check":
+        return handleHealthCheck();
+      case "performance_reset":
+        return handlePerformanceReset();
+      default:
+        throw new Error(\`Unknown operation type: ${message.type}\`);
+    }
+  }
+  function validateMessage(message) {
+    return message && typeof message === "object" && typeof message.type === "string" && typeof message.id === "string" && message.data !== void 0;
+  }
+  function createSuccessResponse(type, id, data, processingTime) {
+    return {
+      type,
+      id,
+      success: true,
+      data,
+      processingTime
+    };
+  }
+  function createErrorResponse(type, id, error, processingTime) {
+    const response = {
+      type,
+      id,
+      success: false,
+      error
+    };
+    if (processingTime !== void 0) {
+      response.processingTime = processingTime;
+    }
+    return response;
+  }
+
+  // src/workers/worker-state.ts
+  var workerState = {
+    isProcessing: false,
+    currentOperation: null,
+    operationStartTime: 0,
+    totalOperations: 0,
+    successfulOperations: 0,
+    failedOperations: 0,
+    timeouts: 0
+  };
+  function isWorkerBusy() {
+    return workerState.isProcessing;
+  }
+  function getCurrentOperation() {
+    return {
+      operation: workerState.currentOperation,
+      duration: workerState.operationStartTime > 0 ? Date.now() - workerState.operationStartTime : 0
+    };
+  }
+  function startOperation(operationType) {
+    if (workerState.isProcessing) {
+      throw new Error(\`Worker busy with ${workerState.currentOperation}\`);
+    }
+    workerState.isProcessing = true;
+    workerState.currentOperation = operationType;
+    workerState.operationStartTime = Date.now();
+    workerState.totalOperations++;
+  }
+  function completeOperation(success, timeout = false) {
+    if (success) {
+      workerState.successfulOperations++;
+    } else {
+      workerState.failedOperations++;
+    }
+    if (timeout) {
+      workerState.timeouts++;
+    }
+    workerState.isProcessing = false;
+    workerState.currentOperation = null;
+    workerState.operationStartTime = 0;
+  }
+  function getPerformanceStats() {
+    const { totalOperations, successfulOperations, timeouts } = workerState;
+    return {
+      totalOperations,
+      successRate: totalOperations > 0 ? successfulOperations / totalOperations : 0,
+      timeoutRate: totalOperations > 0 ? timeouts / totalOperations : 0,
+      averageSuccessTime: 0
+      // Could track if needed
+    };
+  }
+  function handleOperationError(error, timeout = false) {
+    completeOperation(false, timeout);
+    const stats = getPerformanceStats();
+    const shouldRestart = stats.timeoutRate > 0.5 || // More than 50% timeouts
+    stats.successRate < 0.5 && stats.totalOperations > 5;
+    return {
+      shouldRestart,
+      errorMessage: error.message || "Unknown error"
+    };
+  }
+  function prepareForShutdown() {
+    const pendingOperations = workerState.isProcessing;
+    if (pendingOperations) {
+      completeOperation(false, true);
+    }
+    return {
+      pendingOperations,
+      forcedShutdown: pendingOperations
+    };
+  }
+
   // src/workers/recommendation.worker.ts
-  console.log("Recommendation worker initialized");
+  function sendResponse(response) {
+    try {
+      self.postMessage(response);
+    } catch (error) {
+      console.error("Failed to send worker response:", error);
+    }
+  }
+  self.onmessage = function(event) {
+    const message = event.data;
+    const startTime = Date.now();
+    if (!validateMessage(message)) {
+      sendResponse(createErrorResponse("error", "unknown", "Invalid message format"));
+      return;
+    }
+    if (isWorkerBusy()) {
+      const current = getCurrentOperation();
+      sendResponse(createErrorResponse(
+        message.type,
+        message.id,
+        \`Worker busy with ${current.operation}\`
+      ));
+      return;
+    }
+    try {
+      startOperation(message.type);
+      const result = routeMessage(message);
+      const processingTime = Date.now() - startTime;
+      completeOperation(true);
+      sendResponse(createSuccessResponse(message.type, message.id, result, processingTime));
+    } catch (error) {
+      const processingTime = Date.now() - startTime;
+      const isTimeout = error instanceof Error && error.message.includes("timeout");
+      const errorInfo = handleOperationError(error, isTimeout);
+      sendResponse(createErrorResponse(
+        message.type,
+        message.id,
+        errorInfo.errorMessage,
+        processingTime
+      ));
+    }
+  };
+  self.onerror = function(event) {
+    console.error("Worker error:", event);
+    let errorMessage;
+    if (typeof event === "string") {
+      errorMessage = event;
+    } else if (event instanceof ErrorEvent) {
+      errorMessage = event.message || "Unknown worker error";
+    } else {
+      errorMessage = "Unknown worker error";
+    }
+    sendResponse(createErrorResponse(
+      "error",
+      "worker_error",
+      \`Worker error: ${errorMessage}\`
+    ));
+  };
+  self.onunhandledrejection = function(event) {
+    console.error("Worker unhandled rejection:", event.reason);
+    sendResponse(createErrorResponse(
+      "error",
+      "unhandled_rejection",
+      \`Unhandled rejection: ${event.reason}\`
+    ));
+  };
+  self.addEventListener("beforeunload", () => {
+    const shutdown = prepareForShutdown();
+    if (shutdown.forcedShutdown) {
+      console.warn("Worker terminated with pending operations");
+    }
+  });
+  console.log("Resuum recommendation worker initialized with modular architecture");
 })();
 `], { type: 'application/javascript' });
         window.WORKER_URL = URL.createObjectURL(workerBlob);
@@ -92,9 +695,13 @@
         "use strict";
 (() => {
   // src/main.ts
-  console.log("Resuum loading...");
+  console.log("Hello from Resuum");
+  var appContainer = document.getElementById("app");
+  if (appContainer) {
+    appContainer.innerHTML = "<h1>JavaScript is working!</h1>";
+  }
 })();
-//# sourceMappingURL=data:application/json;base64,ewogICJ2ZXJzaW9uIjogMywKICAic291cmNlcyI6IFsic3JjL21haW4udHMiXSwKICAic291cmNlc0NvbnRlbnQiOiBbIi8vIFJlc3V1bSAtIE1haW4gQXBwbGljYXRpb24gRW50cnkgUG9pbnRcbmNvbnNvbGUubG9nKFwiUmVzdXVtIGxvYWRpbmcuLi5cIik7XG5leHBvcnQge307XG4iXSwKICAibWFwcGluZ3MiOiAiOzs7QUFDQSxVQUFRLElBQUksbUJBQW1COyIsCiAgIm5hbWVzIjogW10KfQo=
+//# sourceMappingURL=data:application/json;base64,ewogICJ2ZXJzaW9uIjogMywKICAic291cmNlcyI6IFsic3JjL21haW4udHMiXSwKICAic291cmNlc0NvbnRlbnQiOiBbImNvbnNvbGUubG9nKCdIZWxsbyBmcm9tIFJlc3V1bScpO1xuXG5jb25zdCBhcHBDb250YWluZXIgPSBkb2N1bWVudC5nZXRFbGVtZW50QnlJZCgnYXBwJyk7XG5pZiAoYXBwQ29udGFpbmVyKSB7XG4gIGFwcENvbnRhaW5lci5pbm5lckhUTUwgPSAnPGgxPkphdmFTY3JpcHQgaXMgd29ya2luZyE8L2gxPic7XG59Il0sCiAgIm1hcHBpbmdzIjogIjs7O0FBQUEsVUFBUSxJQUFJLG1CQUFtQjtBQUUvQixNQUFNLGVBQWUsU0FBUyxlQUFlLEtBQUs7QUFDbEQsTUFBSSxjQUFjO0FBQ2hCLGlCQUFhLFlBQVk7QUFBQSxFQUMzQjsiLAogICJuYW1lcyI6IFtdCn0K
 
     </script>
 </body>

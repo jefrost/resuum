@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-import { build } from 'esbuild';
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { gzipSize } from 'gzip-size';
+import { build, context } from 'esbuild';
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -27,8 +27,6 @@ function generateHTML(jsContent, workerContent) {
     <title>Resuum - AI-Powered Resume Optimization</title>
     <meta name="description" content="Transform resume customization from a 30-minute manual process to a 2-minute AI-assisted workflow">
     
-    <!-- CSP for single-file mode -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'unsafe-inline'; worker-src blob:; object-src 'none'; connect-src https://api.openai.com;">
     
     <style>
         * {
@@ -203,27 +201,35 @@ async function buildApp() {
 
 // Handle watch mode
 if (isWatch) {
-  const config = {
-    entryPoints: ['src/main.ts', 'src/workers/recommendation.worker.ts'],
-    format: 'iife',
-    bundle: true,
-    minify: isProduction,
-    sourcemap: !isProduction ? 'inline' : false,
-    target: ['chrome91', 'firefox90', 'safari14'],
-    write: false,
-    watch: {
-      onRebuild(error, result) {
-        if (error) {
+    (async () => {
+      console.log('👀 Starting watch mode...');
+      
+      const rebuildApp = async () => {
+        try {
+          await buildApp();
+        } catch (error) {
           console.error('❌ Rebuild failed:', error.message);
-        } else {
-          console.log('🔄 Files changed, rebuilding...');
-          buildApp().catch(console.error);
         }
-      }
-    }
-  };
-  
-  build(config).catch(console.error);
-} else {
-  buildApp().catch(console.error);
-}
+      };
+      
+      // Initial build
+      await rebuildApp();
+      
+      // Watch for changes using filesystem
+      const { watch } = await import('fs');
+      watch('src', { recursive: true }, (eventType, filename) => {
+        if (filename && filename.endsWith('.ts')) {
+          console.log(`🔄 File changed: ${filename}, rebuilding...`);
+          rebuildApp();
+        }
+      });
+      
+      // Keep process alive
+      process.on('SIGINT', () => {
+        console.log('\n👋 Stopping watch mode...');
+        process.exit(0);
+      });
+    })();
+  } else {
+    buildApp().catch(console.error);
+  }
