@@ -146,7 +146,7 @@ async function reportBundleSize(filePath) {
 async function buildApp() {
   console.log(`🚀 Building Resuum (single-file mode)`);
   
-  // Ensure dist directory exists
+  // Ensure docs directory exists
   mkdirSync('docs', { recursive: true });
   
   try {

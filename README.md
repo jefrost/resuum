@@ -6,8 +6,9 @@ AI-powered resume optimization tool that transforms resume customization from a 
 
 ```bash
 npm install
-npm run build
-npm run preview
+npm run dev         # start with watch
+# or:
+npm run build && npm run preview
 ```
 
 ## Architecture
@@ -36,7 +37,7 @@ npm run preview
 
 ## Deployment
 
-The build outputs a single `dist/index.html` file that can be:
+The build outputs a single `docs/index.html` file that can be:
 - Hosted on any static server
 - Deployed to GitHub Pages
 - Downloaded and run locally
