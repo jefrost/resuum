@@ -147,7 +147,7 @@ async function buildApp() {
   console.log(`🚀 Building Resuum (single-file mode)`);
   
   // Ensure dist directory exists
-  mkdirSync('dist', { recursive: true });
+  mkdirSync('docs', { recursive: true });
   
   try {
     // Build main application
@@ -180,7 +180,7 @@ async function buildApp() {
     const html = generateHTML(jsContent, workerContent);
     
     // Write output
-    const outputPath = 'dist/index.html';
+    const outputPath = 'docs/index.html';
     writeFileSync(outputPath, html);
     
     // Report bundle size
