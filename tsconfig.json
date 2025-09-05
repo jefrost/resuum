@@ -1,0 +1,63 @@
+{
+    "compilerOptions": {
+      "target": "ES2022",
+      "module": "ESNext",
+      "moduleResolution": "bundler",
+      "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
+      "allowImportingTsExtensions": true,
+      "resolveJsonModule": true,
+      "isolatedModules": true,
+      "noEmit": true,
+      "jsx": "preserve",
+  
+      /* Strict Type-Checking Options */
+      "strict": true,
+      "noImplicitAny": true,
+      "strictNullChecks": true,
+      "strictFunctionTypes": true,
+      "strictBindCallApply": true,
+      "strictPropertyInitialization": true,
+      "noImplicitReturns": true,
+      "noImplicitOverride": true,
+      "noPropertyAccessFromIndexSignature": true,
+      "noUncheckedIndexedAccess": true,
+      "exactOptionalPropertyTypes": true,
+  
+      /* Additional Checks */
+      "noUnusedLocals": true,
+      "noUnusedParameters": true,
+      "noFallthroughCasesInSwitch": true,
+      "noUncheckedSideEffectImports": true,
+  
+      /* Module Resolution Options */
+      "esModuleInterop": true,
+      "allowSyntheticDefaultImports": true,
+      "forceConsistentCasingInFileNames": true,
+      "skipLibCheck": true,
+  
+      /* Source Map Options */
+      "sourceMap": true,
+      "inlineSources": true,
+  
+      /* Path Mapping */
+      "baseUrl": ".",
+      "paths": {
+        "@/*": ["src/*"],
+        "@/types/*": ["src/types/*"],
+        "@/utils/*": ["src/utils/*"],
+        "@/workers/*": ["src/workers/*"]
+      }
+    },
+    "include": [
+      "src/**/*.ts",
+      "src/**/*.tsx",
+      "src/**/*.worker.ts",
+      "build.js"
+    ],
+    "exclude": [
+      "node_modules",
+      "dist",
+      "**/*.test.ts",
+      "**/*.spec.ts"
+    ]
+  }
