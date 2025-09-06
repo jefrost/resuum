@@ -108,21 +108,28 @@ import {
      * Build the main UI structure
      */
     private buildUIStructure(): void {
-      // Create main layout
-      const header = this.createHeader();
-      const navigation = this.createTabNavigation();
-      const content = this.createTabContent();
-      const status = this.createStatusBar();
-      
-      this.container.appendChild(header);
-      this.container.appendChild(navigation);
-      this.container.appendChild(content);
-      this.container.appendChild(status);
-      
-      // Store references
-      this.tabNavigation = navigation;
-      this.tabContent = content;
-      this.statusBar = status;
+        // Clear the app container
+        this.container.innerHTML = '';
+        
+        // Find the sidebar navigation container
+        const sidebarNav = document.getElementById('sidebar-nav');
+        if (sidebarNav) {
+        // Create navigation in sidebar
+        const navigation = this.createTabNavigation();
+        sidebarNav.appendChild(navigation);
+        this.tabNavigation = navigation;
+        }
+        
+        // Create main content area
+        const content = this.createTabContent();
+        const status = this.createStatusBar();
+        
+        this.container.appendChild(content);
+        this.container.appendChild(status);
+        
+        // Store references
+        this.tabContent = content;
+        this.statusBar = status;
     }
     
     /**
@@ -195,7 +202,7 @@ import {
      * Create tab content container
      */
     private createTabContent(): HTMLElement {
-      return createSafeElement('main', '', 'tab-content');
+        return createSafeElement('div', '', 'tab-content');
     }
     
     /**
@@ -377,79 +384,52 @@ import {
       return form;
     }
     
+    /**
+     * Load Experience tab content
+     */
     private loadExperienceTab(): void {
         if (!this.tabContent) return;
         
-        const container = createSafeElement('div', '', 'experience-tab');
+        console.log('Loading Experience tab...');
         
-        // Create header with embedding state summary
-        const header = createSafeElement('div', '', 'experience-header');
-        const title = createSafeElement('h2', 'Experience Management', 'section-title');
-        
-        // Get sample data and create summary
-        const { roles, projects, bullets } = this.getSampleData();
-        const summary = this.createEmbeddingStateSummary(bullets);
-        
-        header.appendChild(title);
-        header.appendChild(summary);
-        
-        // Create simple bullets list to test
-        const bulletsList = createSafeElement('div', '', 'bullets-list');
-        bullets.forEach(bullet => {
-          const bulletDiv = createSafeElement('div', '', 'bullet-item');
-          const role = roles.find(r => r.id === bullet.roleId);
-          const project = projects.find(p => p.id === bullet.projectId);
-          
-          setSafeTextContent(bulletDiv, 
-            `[${bullet.embeddingState}] ${role?.company} - ${project?.name}: ${bullet.text.substring(0, 100)}...`
-          );
-          bulletsList.appendChild(bulletDiv);
+        try {
+        // Import and instantiate the ExperienceTab
+        import('./experience-tab').then(({ ExperienceTab }) => {
+            if (this.tabContent) {
+            console.log('Creating ExperienceTab instance...');
+            const experienceTab = new ExperienceTab(this.tabContent);
+            experienceTab.render();
+            console.log('ExperienceTab rendered successfully');
+            }
+        }).catch(error => {
+            console.error('Dynamic import failed:', error);
+            if (this.tabContent) {
+            this.tabContent.innerHTML = `<div style="color: red; padding: 1rem;">
+                Failed to load Experience tab: ${error.message}
+            </div>`;
+            }
         });
-        
-        container.appendChild(header);
-        container.appendChild(bulletsList);
-        this.tabContent.appendChild(container);
-      }
-      
-      private getSampleData() {
-        // Inline sample data for testing
-        const roles = [
-          { id: 'role1', title: 'Senior Consultant', company: 'McKinsey', orderIndex: 0, bulletsLimit: 4, startDate: '2022-06', endDate: null }
-        ];
-        const projects = [
-          { id: 'proj1', roleId: 'role1', name: 'Telecom Transformation', description: 'Network modernization' }
-        ];
-        const bullets = [
-          { id: 'bullet1', roleId: 'role1', projectId: 'proj1', text: 'Led cross-functional team of 12 engineers to develop 5G infrastructure demand forecast model, achieving 15% improvement in accuracy', embeddingState: 'ready', createdAt: Date.now() },
-          { id: 'bullet2', roleId: 'role1', projectId: 'proj1', text: 'Designed go-to-market strategy for new network services', embeddingState: 'pending', createdAt: Date.now() }
-        ];
-        return { roles, projects, bullets };
-      }
-      
-      private createEmbeddingStateSummary(bullets: any[]) {
-        const states = bullets.reduce((acc, bullet) => {
-          acc[bullet.embeddingState] = (acc[bullet.embeddingState] || 0) + 1;
-          return acc;
-        }, {});
-        
-        const summary = createSafeElement('p', '', 'summary-text');
-        setSafeTextContent(summary, 
-          `${bullets.length} bullet points: ${states.ready || 0} ready, ${states.pending || 0} pending, ${states.stale || 0} stale, ${states.failed || 0} failed`
-        );
-        return summary;
-      }
-    
+        } catch (error) {
+        console.error('Experience tab error:', error);
+        if (this.tabContent) {
+            this.tabContent.innerHTML = `<div style="color: red; padding: 1rem;">
+            Experience tab error: ${error instanceof Error ? error.message : 'Unknown error'}
+            </div>`;
+        }
+        }
+    }
+
     /**
-     * Load Settings tab content
+     * Load Settings tab content  
      */
     private loadSettingsTab(): void {
-      if (!this.tabContent) return;
-      
-      const container = createSafeElement('div', '', 'settings-tab');
-      const placeholder = createSafeElement('div', 'Settings configuration coming soon...', 'tab-placeholder');
-      
-      container.appendChild(placeholder);
-      this.tabContent.appendChild(container);
+        if (!this.tabContent) return;
+        
+        const container = createSafeElement('div', '', 'settings-tab');
+        const placeholder = createSafeElement('div', 'Settings configuration coming soon...', 'tab-placeholder');
+        
+        container.appendChild(placeholder);
+        this.tabContent.appendChild(container);
     }
     
     // ============================================================================

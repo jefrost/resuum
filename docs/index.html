@@ -5,85 +5,105 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Resuum - AI-Powered Resume Optimization</title>
     <style>
+        /* Main Layout - Two Column */
         body { 
             font-family: system-ui, sans-serif; 
             margin: 0; 
-            padding: 20px; 
+            padding: 0; 
             background: #f5f5f5; 
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
         }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
-        }
+
         .header {
             text-align: center;
-            margin-bottom: 2rem;
+            padding: 1rem 0;
+            background: white;
+            border-bottom: 1px solid #e5e7eb;
         }
         .header h1 {
             color: #1e293b;
             font-size: 2.5rem;
-            margin-bottom: 0.5rem;
+            margin: 0 0 0.5rem 0;
         }
         .header p {
             color: #64748b;
             font-size: 1.1rem;
+            margin: 0;
         }
-        .error { 
-            background: #fee; 
-            border: 1px solid #fcc; 
-            padding: 1rem; 
-            border-radius: 4px; 
-            color: #c00; 
-            margin: 1rem 0;
+
+        .main-container {
+            flex: 1;
+            display: flex;
+            min-height: 0;
         }
-        .success {
-            background: #efe;
-            border: 1px solid #cfc;
+
+        /* Sidebar Navigation */
+        .sidebar {
+            width: 240px;
+            background: white;
+            border-right: 1px solid #e5e7eb;
+            flex-shrink: 0;
             padding: 1rem;
-            border-radius: 4px;
-            color: #060;
-            margin: 1rem 0;
         }
+
         .tab-navigation {
-            margin-bottom: 2rem;
+            width: 100%;
         }
         .tab-list {
             display: flex;
+            flex-direction: column;
             list-style: none;
-            background-color: #f1f5f9;
-            border-radius: 8px;
-            padding: 4px;
             margin: 0;
+            padding: 0;
+            gap: 4px;
         }
         .tab-item {
-            flex: 1;
+            width: 100%;
         }
         .tab-button {
             width: 100%;
             padding: 12px 16px;
             border: none;
             background: transparent;
-            border-radius: 6px;
+            border-radius: 8px;
             cursor: pointer;
             transition: all 0.2s;
-            font-size: 14px;
+            font-size: 15px;
             font-weight: 500;
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 12px;
+            text-align: left;
+            color: #374151;
+        }
+        .tab-button:hover {
+            background-color: #f3f4f6;
         }
         .tab-button--active {
-            background-color: white;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-            color: #1e293b;
+            background-color: #e0f2fe;
+            color: #0369a1;
+            font-weight: 600;
         }
-        .tab-button:hover:not(.tab-button--active) {
-            background-color: rgba(255, 255, 255, 0.5);
+
+        /* Main Content Area */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            padding: 2rem;
         }
+
         .tab-content {
             background: white;
             padding: 2rem;
             border-radius: 8px;
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-            min-height: 400px;
+            flex: 1;
+            overflow: auto;
         }
         
         /* Experience Tab Styles */
@@ -105,6 +125,24 @@
             margin: 0;
             font-weight: 500;
         }
+        .state-badges {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+            flex-wrap: wrap;
+        }
+        .summary-badge {
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+        .summary-badge--ready { background: #dcfce7; color: #166534; }
+        .summary-badge--pending { background: #fef3c7; color: #92400e; }
+        .summary-badge--stale { background: #fed7aa; color: #9a3412; }
+        .summary-badge--failed { background: #fecaca; color: #991b1b; }
+        
+        /* Sub Navigation */
         .experience-sub-nav {
             margin-bottom: 1.5rem;
         }
@@ -128,6 +166,19 @@
             color: white;
             border-color: #3b82f6;
         }
+        
+        /* Table Styles */
+        .table-controls {
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .sort-select {
+            padding: 0.5rem;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+        }
         .bullets-table {
             width: 100%;
             border-collapse: collapse;
@@ -138,6 +189,7 @@
             padding: 0.75rem;
             text-align: left;
             border: 1px solid #e5e7eb;
+            vertical-align: top;
         }
         .bullets-table th {
             background: #f9fafb;
@@ -146,28 +198,21 @@
         .bullets-table tr:nth-child(even) {
             background: #f9fafb;
         }
+        
+        /* State Badges */
         .state-badge {
             padding: 0.25rem 0.5rem;
             border-radius: 4px;
             font-size: 0.875rem;
             font-weight: 500;
+            white-space: nowrap;
         }
-        .state-badge--ready {
-            background: #dcfce7;
-            color: #166534;
-        }
-        .state-badge--pending {
-            background: #fef3c7;
-            color: #92400e;
-        }
-        .state-badge--stale {
-            background: #fed7aa;
-            color: #9a3412;
-        }
-        .state-badge--failed {
-            background: #fecaca;
-            color: #991b1b;
-        }
+        .state-badge--ready { background: #dcfce7; color: #166534; }
+        .state-badge--pending { background: #fef3c7; color: #92400e; }
+        .state-badge--stale { background: #fed7aa; color: #9a3412; }
+        .state-badge--failed { background: #fecaca; color: #991b1b; }
+        
+        /* Quality Indicators */
         .quality-indicators {
             display: flex;
             gap: 0.25rem;
@@ -181,44 +226,109 @@
         .quality-indicator.inactive {
             opacity: 0.3;
         }
-        .table-controls {
-            margin-bottom: 1rem;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
+        
+        /* Status Bar */
+        .status-bar {
+            margin-top: 1rem;
+            padding: 0.5rem;
+            border-radius: 4px;
         }
-        .sort-select {
+        .status-bar--loading {
+            background: #fef3c7;
+            color: #92400e;
+        }
+        .status-bar--error {
+            background: #fecaca;
+            color: #991b1b;
+        }
+        .status-bar--success {
+            background: #dcfce7;
+            color: #166534;
+        }
+        .status-bar--hidden {
+            display: none;
+        }
+        
+        /* Form Styles */
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        .form-label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+        .form-input,
+        .form-textarea,
+        .form-select {
+            width: 100%;
             padding: 0.5rem;
             border: 1px solid #d1d5db;
             border-radius: 4px;
+            font-family: inherit;
         }
-        .bullet-item {
-            padding: 0.75rem;
-            border: 1px solid #e5e7eb;
+        .form-textarea {
+            resize: vertical;
+        }
+        .form-submit {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
             border-radius: 4px;
-            margin-bottom: 0.5rem;
-            background: white;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 500;
+        }
+        .form-submit:hover {
+            background: #2563eb;
+        }
+        .form-submit:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+        
+        /* Utility Classes */
+        .hidden { display: none; }
+        .error { 
+            background: #fecaca; 
+            border: 1px solid #f87171; 
+            padding: 1rem; 
+            border-radius: 4px; 
+            color: #991b1b; 
+            margin: 1rem 0;
+        }
+        .success {
+            background: #dcfce7;
+            border: 1px solid #4ade80;
+            padding: 1rem;
+            border-radius: 4px;
+            color: #166534;
+            margin: 1rem 0;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <header class="header">
-            <h1>Resuum</h1>
-            <p>AI-Powered Resume Optimization</p>
-        </header>
+    <header class="header">
+        <h1>Resuum</h1>
+        <p>AI-Powered Resume Optimization</p>
+    </header>
+    
+    <div class="main-container">
+        <div class="sidebar">
+            <div id="sidebar-nav"></div>
+        </div>
         
-        <main id="app">
-            <div id="loading">
-                Loading application...
-            </div>
-        </main>
+        <div class="main-content">
+            <main id="app">
+                <div id="loading">Loading application...</div>
+            </main>
+        </div>
     </div>
 
     <script>
-        // Embedded TypeScript compiled code
         "use strict";
-var ResuumApp = (() => {
+var Resuum = (() => {
   var __defProp = Object.defineProperty;
   var __getOwnPropNames = Object.getOwnPropertyNames;
   var __esm = (fn, res) => function __init() {
@@ -229,943 +339,1094 @@ var ResuumApp = (() => {
       __defProp(target, name, { get: all[name], enumerable: true });
   };
 
-  // src/utils/worker-manager.ts
-  var RESTART_DELAY_BASE, MAX_RESTART_ATTEMPTS, HEALTH_CHECK_INTERVAL, MESSAGE_TIMEOUT, WorkerManager;
-  var init_worker_manager = __esm({
-    "src/utils/worker-manager.ts"() {
+  // src/ui/xss-safe-rendering.ts
+  function createSafeTextNode(text) {
+    return document.createTextNode(text || "");
+  }
+  function setSafeTextContent(element, text) {
+    element.textContent = "";
+    element.appendChild(createSafeTextNode(text));
+  }
+  function createSafeElement(tagName, textContent, className) {
+    const element = document.createElement(tagName);
+    if (className) {
+      element.className = className;
+    }
+    if (textContent) {
+      setSafeTextContent(element, textContent);
+    }
+    return element;
+  }
+  function createErrorElement(message, title) {
+    const container = createSafeElement("div", "", "error-message");
+    if (title) {
+      const titleElement = createSafeElement("h3", title, "error-title");
+      container.appendChild(titleElement);
+    }
+    const messageElement = createSafeElement("p", message, "error-text");
+    container.appendChild(messageElement);
+    return container;
+  }
+  function createSuccessElement(message) {
+    return createSafeElement("div", message, "success-message");
+  }
+  var init_xss_safe_rendering = __esm({
+    "src/ui/xss-safe-rendering.ts"() {
       "use strict";
-      RESTART_DELAY_BASE = 200;
-      MAX_RESTART_ATTEMPTS = 1;
-      HEALTH_CHECK_INTERVAL = 3e4;
-      MESSAGE_TIMEOUT = 5e3;
-      WorkerManager = class {
-        worker = null;
-        workerScript = null;
-        pendingMessages = /* @__PURE__ */ new Map();
-        restartAttempts = 0;
-        isHealthy = true;
-        lastHealthCheck = 0;
-        healthCheckTimer = null;
-        messageIdCounter = 0;
-        config;
-        constructor(config = {}) {
-          this.config = {
-            workerScript: void 0,
-            enableHealthChecks: true,
-            enableCrashRecovery: true,
-            maxConcurrentOperations: 3,
-            ...config
-          };
+    }
+  });
+
+  // src/ui/bullets-table.ts
+  var BulletsTable;
+  var init_bullets_table = __esm({
+    "src/ui/bullets-table.ts"() {
+      "use strict";
+      init_xss_safe_rendering();
+      BulletsTable = class {
+        container;
+        state = {
+          sortBy: "role",
+          sortDirection: "asc"
+        };
+        constructor(container) {
+          this.container = container;
         }
         // ============================================================================
-        // Worker Deployment Options
+        // Public Interface
         // ============================================================================
         /**
-         * Initialize worker with automatic deployment option detection
+         * Render the complete bullets table
          */
-        async initialize(workerCode) {
-          try {
-            if (workerCode) {
-              await this.createBlobWorker(workerCode);
-              console.log("Worker deployed using Blob (inline mode)");
-              return;
-            }
-            if (this.config.workerScript) {
-              await this.createFileWorker(this.config.workerScript);
-              console.log("Worker deployed using separate file");
-              return;
-            }
-            throw new Error("No worker deployment option available");
-          } catch (error) {
-            console.error("Worker initialization failed:", error);
-            throw new Error(`Worker deployment failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+        render(bullets, roles, projects) {
+          this.container.innerHTML = "";
+          const tableContainer = createSafeElement("div", "", "table-container");
+          const controls = this.createTableControls();
+          tableContainer.appendChild(controls);
+          const table = createSafeElement("table", "", "bullets-table");
+          const thead = this.createTableHeader();
+          const tbody = this.createTableBody(bullets, roles, projects);
+          table.appendChild(thead);
+          table.appendChild(tbody);
+          tableContainer.appendChild(table);
+          this.container.appendChild(tableContainer);
+        }
+        /**
+         * Update sort criteria and re-render if needed
+         */
+        updateSort(sortBy, direction) {
+          this.state.sortBy = sortBy;
+          if (direction) {
+            this.state.sortDirection = direction;
           }
         }
         /**
-         * Create worker from Blob (inline deployment)
+         * Get current sort state
          */
-        async createBlobWorker(workerCode) {
-          try {
-            if (!("Blob" in globalThis) || !("URL" in globalThis) || !globalThis.URL.createObjectURL) {
-              throw new Error("Blob workers not supported");
-            }
-            const blob = new Blob([workerCode], { type: "application/javascript" });
-            const workerUrl = URL.createObjectURL(blob);
-            this.worker = new Worker(workerUrl);
-            this.workerScript = workerUrl;
-            await this.setupWorker();
-            setTimeout(() => {
-              URL.revokeObjectURL(workerUrl);
-            }, 1e3);
-          } catch (error) {
-            throw new Error(`Blob worker creation failed: ${error instanceof Error ? error.message : "Unknown error"}`);
-          }
-        }
-        /**
-         * Create worker from separate file
-         */
-        async createFileWorker(scriptPath) {
-          try {
-            this.worker = new Worker(scriptPath);
-            this.workerScript = scriptPath;
-            await this.setupWorker();
-          } catch (error) {
-            throw new Error(`File worker creation failed: ${error instanceof Error ? error.message : "Unknown error"}`);
-          }
-        }
-        /**
-         * Setup worker event handlers and health monitoring
-         */
-        async setupWorker() {
-          if (!this.worker) {
-            throw new Error("Worker not created");
-          }
-          this.worker.onmessage = (event) => {
-            this.handleWorkerMessage(event.data);
-          };
-          this.worker.onerror = (error) => {
-            console.error("Worker error detected:", error);
-            this.handleWorkerCrash(new Error(`Worker error: ${error instanceof ErrorEvent ? error.message : "Unknown error"}`));
-          };
-          this.worker.onmessageerror = (error) => {
-            console.error("Worker message error:", error);
-            this.handleWorkerCrash(new Error("Worker message error"));
-          };
-          await this.performHealthCheck();
-          if (this.config.enableHealthChecks) {
-            this.startHealthChecks();
-          }
-          console.log("Worker setup completed successfully");
+        getSortState() {
+          return { ...this.state };
         }
         // ============================================================================
-        // Message Handling and Timeout Management
+        // Table Controls
         // ============================================================================
         /**
-         * Send message to worker with timeout handling
+         * Create table controls (sorting, filtering)
          */
-        async sendMessage(type, data, timeoutMs = MESSAGE_TIMEOUT) {
-          if (!this.worker || !this.isHealthy) {
-            if (this.config.enableCrashRecovery && this.canRestart()) {
-              await this.restartWorker();
-            } else {
-              throw new Error("Worker not available");
+        createTableControls() {
+          const controls = createSafeElement("div", "", "table-controls");
+          const sortLabel = createSafeElement("label", "Sort by: ", "control-label");
+          const sortSelect = document.createElement("select");
+          sortSelect.className = "sort-select";
+          const sortOptions = [
+            { value: "role", label: "Role (Chronological)" },
+            { value: "project", label: "Project Name" },
+            { value: "created", label: "Created Date" }
+          ];
+          sortOptions.forEach((option) => {
+            const optionElement = document.createElement("option");
+            optionElement.value = option.value;
+            setSafeTextContent(optionElement, option.label);
+            if (option.value === this.state.sortBy) {
+              optionElement.selected = true;
             }
-          }
-          if (this.pendingMessages.size >= this.config.maxConcurrentOperations) {
-            throw new Error(`Too many concurrent operations (max: ${this.config.maxConcurrentOperations})`);
-          }
-          const messageId = this.generateMessageId();
-          const message = {
-            type,
-            id: messageId,
-            data
-          };
-          return new Promise((resolve, reject) => {
-            const pending = {
-              id: messageId,
-              resolve,
-              reject,
-              timeout: Date.now() + timeoutMs,
-              timestamp: Date.now(),
-              operation: type
-            };
-            this.pendingMessages.set(messageId, pending);
-            const timeoutId = setTimeout(() => {
-              this.handleMessageTimeout(messageId);
-            }, timeoutMs);
-            try {
-              this.worker.postMessage(message);
-            } catch (error) {
-              clearTimeout(timeoutId);
-              this.pendingMessages.delete(messageId);
-              reject(new Error(`Failed to send message: ${error instanceof Error ? error.message : "Unknown error"}`));
+            sortSelect.appendChild(optionElement);
+          });
+          sortSelect.addEventListener("change", () => {
+            this.state.sortBy = sortSelect.value;
+            this.dispatchSortChange();
+          });
+          controls.appendChild(sortLabel);
+          controls.appendChild(sortSelect);
+          return controls;
+        }
+        /**
+         * Dispatch custom event when sort changes
+         */
+        dispatchSortChange() {
+          const event = new CustomEvent("sort-change", {
+            detail: { sortBy: this.state.sortBy, sortDirection: this.state.sortDirection }
+          });
+          this.container.dispatchEvent(event);
+        }
+        // ============================================================================
+        // Table Structure
+        // ============================================================================
+        /**
+         * Create table header
+         */
+        createTableHeader() {
+          const thead = createSafeElement("thead", "", "table-header");
+          const headerRow = createSafeElement("tr", "", "header-row");
+          const headers = [
+            { text: "Role", class: "role-header" },
+            { text: "Project", class: "project-header" },
+            { text: "Bullet Text", class: "text-header" },
+            { text: "State", class: "state-header" },
+            { text: "Quality", class: "quality-header" },
+            { text: "Created", class: "created-header" }
+          ];
+          headers.forEach((header) => {
+            const th = createSafeElement("th", header.text, header.class);
+            headerRow.appendChild(th);
+          });
+          thead.appendChild(headerRow);
+          return thead;
+        }
+        /**
+         * Create table body with sorted data
+         */
+        createTableBody(bullets, roles, projects) {
+          const tbody = createSafeElement("tbody", "", "table-body");
+          const sortedBullets = this.sortBullets(bullets, roles, projects);
+          sortedBullets.forEach((bullet) => {
+            const role = roles.find((r) => r.id === bullet.roleId);
+            const project = projects.find((p) => p.id === bullet.projectId);
+            if (role && project) {
+              const row = this.createBulletRow(bullet, role, project);
+              tbody.appendChild(row);
             }
           });
-        }
-        /**
-         * Handle worker response messages
-         */
-        handleWorkerMessage(response) {
-          const pending = this.pendingMessages.get(response.id);
-          if (!pending) {
-            console.warn(`Received response for unknown message ID: ${response.id}`);
-            return;
-          }
-          this.pendingMessages.delete(response.id);
-          if (response.success) {
-            pending.resolve(response);
-          } else {
-            pending.reject(new Error(response.error || "Unknown worker error"));
-          }
-        }
-        /**
-         * Handle message timeout
-         */
-        handleMessageTimeout(messageId) {
-          const pending = this.pendingMessages.get(messageId);
-          if (pending) {
-            this.pendingMessages.delete(messageId);
-            pending.reject(new Error(`Operation timeout after ${MESSAGE_TIMEOUT}ms: ${pending.operation}`));
-            if (this.pendingMessages.size === 0) {
-              console.warn("Worker timeout detected, considering restart");
-              if (this.config.enableCrashRecovery && this.canRestart()) {
-                this.restartWorker().catch(console.error);
-              }
-            }
-          }
+          return tbody;
         }
         // ============================================================================
-        // Crash Detection and Recovery
+        // Row Creation
         // ============================================================================
         /**
-         * Handle worker crash
+         * Create individual bullet row
          */
-        handleWorkerCrash(error) {
-          console.error("Worker crash detected:", error);
-          this.isHealthy = false;
-          for (const [, pending] of this.pendingMessages) {
-            pending.reject(new Error(`Worker crashed: ${error.message}`));
-          }
-          this.pendingMessages.clear();
-          if (this.config.enableCrashRecovery && this.canRestart()) {
-            console.log("Attempting worker restart...");
-            this.restartWorker().catch(console.error);
-          }
-        }
-        /**
-         * Check if worker can be restarted
-         */
-        canRestart() {
-          return this.restartAttempts < MAX_RESTART_ATTEMPTS;
-        }
-        /**
-         * Restart worker with exponential backoff
-         */
-        async restartWorker() {
-          if (!this.canRestart()) {
-            throw new Error("Maximum restart attempts exceeded");
-          }
-          this.restartAttempts++;
-          const delay = RESTART_DELAY_BASE * Math.pow(2, this.restartAttempts - 1);
-          console.log(`Restarting worker in ${delay}ms (attempt ${this.restartAttempts}/${MAX_RESTART_ATTEMPTS})`);
-          await new Promise((resolve) => setTimeout(resolve, delay));
-          try {
-            if (this.worker) {
-              this.worker.terminate();
-              this.worker = null;
-            }
-            if (this.workerScript) {
-              if (this.workerScript.startsWith("blob:")) {
-                throw new Error("Cannot restart Blob worker without original code");
-              } else {
-                await this.createFileWorker(this.workerScript);
-              }
-            }
-            this.isHealthy = true;
-            console.log("Worker restarted successfully");
-          } catch (error) {
-            console.error("Worker restart failed:", error);
-            throw error;
-          }
+        createBulletRow(bullet, role, project) {
+          const row = createSafeElement("tr", "", "bullet-row");
+          const roleCell = createSafeElement("td", "", "role-cell");
+          setSafeTextContent(roleCell, `${role.title} - ${role.company}`);
+          const projectCell = createSafeElement("td", "", "project-cell");
+          setSafeTextContent(projectCell, project.name);
+          const textCell = createSafeElement("td", "", "text-cell");
+          const truncatedText = bullet.text.length > 80 ? bullet.text.substring(0, 80) + "..." : bullet.text;
+          setSafeTextContent(textCell, truncatedText);
+          textCell.title = bullet.text;
+          const stateCell = createSafeElement("td", "", "state-cell");
+          const stateBadge = this.createStateBadge(bullet.embeddingState);
+          stateCell.appendChild(stateBadge);
+          const qualityCell = createSafeElement("td", "", "quality-cell");
+          const qualityIndicators = this.createQualityIndicators(bullet.features);
+          qualityCell.appendChild(qualityIndicators);
+          const createdCell = createSafeElement("td", "", "created-cell");
+          const createdDate = new Date(bullet.createdAt).toLocaleDateString();
+          setSafeTextContent(createdCell, createdDate);
+          row.appendChild(roleCell);
+          row.appendChild(projectCell);
+          row.appendChild(textCell);
+          row.appendChild(stateCell);
+          row.appendChild(qualityCell);
+          row.appendChild(createdCell);
+          return row;
         }
         // ============================================================================
-        // Health Monitoring
+        // Badge and Indicator Creation
         // ============================================================================
         /**
-         * Perform health check
+         * Create embedding state badge with proper styling
          */
-        async performHealthCheck() {
-          try {
-            const response = await this.sendMessage("health_check", {}, 2e3);
-            this.isHealthy = response.success;
-            this.lastHealthCheck = Date.now();
-            if (this.isHealthy) {
-              this.restartAttempts = 0;
-            }
-            return this.isHealthy;
-          } catch (error) {
-            console.warn("Health check failed:", error);
-            this.isHealthy = false;
-            return false;
-          }
-        }
-        /**
-         * Start periodic health checks
-         */
-        startHealthChecks() {
-          if (this.healthCheckTimer) {
-            clearInterval(this.healthCheckTimer);
-          }
-          this.healthCheckTimer = setInterval(() => {
-            this.performHealthCheck().catch(console.error);
-          }, HEALTH_CHECK_INTERVAL);
-        }
-        /**
-         * Stop health checks
-         */
-        stopHealthChecks() {
-          if (this.healthCheckTimer) {
-            clearInterval(this.healthCheckTimer);
-            this.healthCheckTimer = null;
-          }
-        }
-        // ============================================================================
-        // Public API Methods
-        // ============================================================================
-        /**
-         * Get worker status and performance metrics
-         */
-        getStatus() {
-          return {
-            isHealthy: this.isHealthy,
-            pendingOperations: this.pendingMessages.size,
-            restartAttempts: this.restartAttempts,
-            lastHealthCheck: this.lastHealthCheck
+        createStateBadge(state) {
+          const badge = createSafeElement("span", "", `state-badge state-badge--${state}`);
+          const stateConfig = {
+            ready: { text: "\u2705 Ready", class: "ready" },
+            pending: { text: "\u23F3 Pending", class: "pending" },
+            stale: { text: "\u26A0\uFE0F Stale", class: "stale" },
+            failed: { text: "\u274C Failed", class: "failed" }
           };
+          const config = stateConfig[state] || { text: "\u2753 Unknown", class: "unknown" };
+          setSafeTextContent(badge, config.text);
+          return badge;
         }
         /**
-         * Terminate worker and cleanup resources
+         * Create quality feature indicators
          */
-        terminate() {
-          this.stopHealthChecks();
-          if (this.worker) {
-            this.worker.terminate();
-            this.worker = null;
-          }
-          if (this.workerScript && this.workerScript.startsWith("blob:")) {
-            try {
-              URL.revokeObjectURL(this.workerScript);
-            } catch (error) {
+        createQualityIndicators(features) {
+          const container = createSafeElement("div", "", "quality-indicators");
+          const indicators = [
+            { key: "hasNumbers", symbol: "\u{1F4CA}", active: features.hasNumbers, title: "Has quantified results" },
+            { key: "actionVerb", symbol: "\u26A1", active: features.actionVerb, title: "Strong action verb" },
+            { key: "lengthOk", symbol: "\u{1F4CF}", active: features.lengthOk, title: "Appropriate length" }
+          ];
+          indicators.forEach((indicator) => {
+            const span = createSafeElement("span", "", `quality-indicator ${indicator.active ? "active" : "inactive"}`);
+            setSafeTextContent(span, indicator.symbol);
+            span.title = indicator.title;
+            container.appendChild(span);
+          });
+          return container;
+        }
+        // ============================================================================
+        // Data Sorting (Deterministic as per Plan)
+        // ============================================================================
+        /**
+         * Sort bullets based on current criteria with deterministic ordering
+         */
+        sortBullets(bullets, roles, projects) {
+          return bullets.slice().sort((a, b) => {
+            let comparison = 0;
+            switch (this.state.sortBy) {
+              case "role":
+                const roleA = roles.find((r) => r.id === a.roleId);
+                const roleB = roles.find((r) => r.id === b.roleId);
+                if (roleA && roleB) {
+                  comparison = roleA.orderIndex - roleB.orderIndex;
+                  if (comparison === 0) {
+                    const projectA = projects.find((p) => p.id === a.projectId);
+                    const projectB = projects.find((p) => p.id === b.projectId);
+                    if (projectA && projectB) {
+                      comparison = projectA.name.localeCompare(projectB.name);
+                    }
+                    if (comparison === 0) {
+                      comparison = a.createdAt - b.createdAt;
+                    }
+                  }
+                }
+                break;
+              case "project":
+                const projA = projects.find((p) => p.id === a.projectId);
+                const projB = projects.find((p) => p.id === b.projectId);
+                if (projA && projB) {
+                  comparison = projA.name.localeCompare(projB.name);
+                  if (comparison === 0) {
+                    comparison = a.createdAt - b.createdAt;
+                  }
+                }
+                break;
+              case "created":
+                comparison = a.createdAt - b.createdAt;
+                if (comparison === 0) {
+                  const roleA2 = roles.find((r) => r.id === a.roleId);
+                  const roleB2 = roles.find((r) => r.id === b.roleId);
+                  if (roleA2 && roleB2) {
+                    comparison = roleA2.orderIndex - roleB2.orderIndex;
+                  }
+                }
+                break;
             }
-          }
-          for (const [, pending] of this.pendingMessages) {
-            pending.reject(new Error("Worker terminated"));
-          }
-          this.pendingMessages.clear();
-          this.isHealthy = false;
-          this.restartAttempts = 0;
-          this.lastHealthCheck = 0;
-          this.workerScript = null;
-          console.log("Worker manager terminated and cleaned up");
-        }
-        // ============================================================================
-        // Utility Methods
-        // ============================================================================
-        /**
-         * Generate unique message ID
-         */
-        generateMessageId() {
-          return `msg_${Date.now()}_${++this.messageIdCounter}`;
+            return this.state.sortDirection === "desc" ? -comparison : comparison;
+          });
         }
       };
     }
   });
 
-  // src/utils/worker-communication.ts
-  var worker_communication_exports = {};
-  __export(worker_communication_exports, {
-    WorkerCommunication: () => WorkerCommunication,
-    calculateSimilarities: () => calculateSimilarities,
-    checkWorkerHealth: () => checkWorkerHealth,
-    generateRecommendations: () => generateRecommendations,
-    getWorkerCommunication: () => getWorkerCommunication,
-    getWorkerStatus: () => getWorkerStatus,
-    initializeWorker: () => initializeWorker,
-    resetWorkerCommunication: () => resetWorkerCommunication
-  });
-  function getWorkerCommunication() {
-    if (!globalWorkerCommunication) {
-      globalWorkerCommunication = new WorkerCommunication();
-    }
-    return globalWorkerCommunication;
+  // src/data/sample-data.ts
+  function getSampleDataset() {
+    return {
+      roles: SAMPLE_ROLES,
+      projects: SAMPLE_PROJECTS,
+      bullets: SAMPLE_BULLETS
+    };
   }
-  function resetWorkerCommunication() {
-    if (globalWorkerCommunication) {
-      globalWorkerCommunication.terminate();
-      globalWorkerCommunication = null;
-    }
+  function getEmbeddingStateSummary() {
+    const states = SAMPLE_BULLETS.reduce((acc, bullet) => {
+      acc[bullet.embeddingState] = (acc[bullet.embeddingState] || 0) + 1;
+      return acc;
+    }, {});
+    return {
+      ready: states.ready || 0,
+      pending: states.pending || 0,
+      stale: states.stale || 0,
+      failed: states.failed || 0,
+      total: SAMPLE_BULLETS.length
+    };
   }
-  async function initializeWorker(workerCode) {
-    const comm = getWorkerCommunication();
-    await comm.initialize(workerCode);
-  }
-  async function calculateSimilarities(jobVector, bulletVectors, selectedVectors = []) {
-    const comm = getWorkerCommunication();
-    return comm.calculateSimilarities(jobVector, bulletVectors, selectedVectors);
-  }
-  async function generateRecommendations(jobVector, projects, bullets, roleLimit, functionBias = "general") {
-    const comm = getWorkerCommunication();
-    return comm.generateRecommendations(
-      jobVector,
-      projects,
-      bullets,
-      roleLimit,
-      1,
-      // maxPerProject
-      functionBias
-    );
-  }
-  async function checkWorkerHealth() {
-    const comm = getWorkerCommunication();
-    return comm.healthCheck();
-  }
-  function getWorkerStatus() {
-    const comm = getWorkerCommunication();
-    return comm.getStatus();
-  }
-  var FUNCTION_BIAS_WEIGHTS, WorkerCommunication, globalWorkerCommunication;
-  var init_worker_communication = __esm({
-    "src/utils/worker-communication.ts"() {
+  var SAMPLE_ROLES, SAMPLE_PROJECTS, SAMPLE_BULLETS;
+  var init_sample_data = __esm({
+    "src/data/sample-data.ts"() {
       "use strict";
-      init_worker_manager();
-      FUNCTION_BIAS_WEIGHTS = {
-        general: {
-          relevance: 0.8,
-          quality: 0.15,
-          recency: 0.05,
-          redundancyPenalty: 0.3
+      SAMPLE_ROLES = [
+        {
+          id: "role_mckinsey_sc_001",
+          title: "Senior Consultant",
+          company: "McKinsey & Company",
+          orderIndex: 0,
+          bulletsLimit: 4,
+          startDate: "2022-06",
+          endDate: null
+          // Current role
         },
-        technical: {
-          relevance: 0.85,
-          // α +0.05
-          quality: 0.2,
-          // μ +0.05 (capped)
-          recency: 0.05,
-          redundancyPenalty: 0.3
+        {
+          id: "role_bcg_consultant_002",
+          title: "Consultant",
+          company: "Boston Consulting Group",
+          orderIndex: 1,
+          bulletsLimit: 3,
+          startDate: "2020-09",
+          endDate: "2022-05"
         },
-        business_strategy: {
-          relevance: 0.8,
-          quality: 0.2,
-          // μ +0.05
-          recency: 0.05,
-          redundancyPenalty: 0.35
-          // λ +0.05 (encourage diversity)
+        {
+          id: "role_goldman_analyst_003",
+          title: "Investment Banking Analyst",
+          company: "Goldman Sachs",
+          orderIndex: 2,
+          bulletsLimit: 3,
+          startDate: "2018-07",
+          endDate: "2020-08"
+        }
+      ];
+      SAMPLE_PROJECTS = [
+        {
+          id: "proj_telecom_transform_001",
+          roleId: "role_mckinsey_sc_001",
+          name: "Global Telecom Transformation",
+          description: "Core network modernization and go-to-market strategy",
+          centroidVector: new ArrayBuffer(1536 * 4),
+          vectorDimensions: 1536,
+          bulletCount: 3,
+          embeddingVersion: 1,
+          createdAt: 16725312e5,
+          updatedAt: Date.now()
         },
-        marketing: {
-          relevance: 0.78,
-          // α -0.02 (less keyword chasing)
-          quality: 0.2,
-          // μ +0.05
-          recency: 0.05,
-          redundancyPenalty: 0.3
+        {
+          id: "proj_healthcare_ma_002",
+          roleId: "role_mckinsey_sc_001",
+          name: "Healthcare M&A Due Diligence",
+          description: "Strategic and operational due diligence for $2.5B acquisition",
+          centroidVector: new ArrayBuffer(1536 * 4),
+          vectorDimensions: 1536,
+          bulletCount: 2,
+          embeddingVersion: 1,
+          createdAt: 16752096e5,
+          updatedAt: Date.now()
+        }
+      ];
+      SAMPLE_BULLETS = [
+        {
+          id: "bullet_telecom_001",
+          roleId: "role_mckinsey_sc_001",
+          projectId: "proj_telecom_transform_001",
+          text: "Led cross-functional team of 12 engineers to develop 5G infrastructure demand forecast model, achieving 15% improvement in accuracy",
+          source: "manual",
+          normalizedFingerprint: "led cross functional team of <NUM> engineers to develop <NUM> infrastructure demand forecast model achieving <NUM> improvement in accuracy",
+          features: {
+            hasNumbers: true,
+            actionVerb: true,
+            lengthOk: true
+          },
+          embeddingState: "ready",
+          lastEmbeddedAt: Date.now() - 864e5,
+          retryCount: 0,
+          createdAt: 16725312e5,
+          lastModified: 16725312e5
         },
-        operations: {
-          relevance: 0.8,
-          quality: 0.15,
-          recency: 0.1,
-          // ρ +0.05 (mild recency bump)
-          redundancyPenalty: 0.3
+        {
+          id: "bullet_telecom_002",
+          roleId: "role_mckinsey_sc_001",
+          projectId: "proj_telecom_transform_001",
+          text: "Designed go-to-market strategy for new network services, conducting market analysis across 8 regions",
+          source: "manual",
+          normalizedFingerprint: "designed go to market strategy for new network services conducting market analysis across <NUM> regions",
+          features: {
+            hasNumbers: true,
+            actionVerb: true,
+            lengthOk: true
+          },
+          embeddingState: "pending",
+          retryCount: 1,
+          createdAt: 16726176e5,
+          lastModified: Date.now()
         }
-      };
-      WorkerCommunication = class {
-        workerManager;
-        isInitialized = false;
-        constructor() {
-          this.workerManager = new WorkerManager({
-            enableHealthChecks: true,
-            enableCrashRecovery: true,
-            maxConcurrentOperations: 3
-          });
-        }
-        // ============================================================================
-        // Initialization
-        // ============================================================================
-        /**
-         * Initialize worker communication
-         */
-        async initialize(workerCode) {
-          try {
-            await this.workerManager.initialize(workerCode);
-            this.isInitialized = true;
-            console.log("Worker communication initialized successfully");
-          } catch (error) {
-            console.error("Worker communication initialization failed:", error);
-            throw new Error(`Failed to initialize worker: ${error instanceof Error ? error.message : "Unknown error"}`);
-          }
-        }
-        /**
-         * Check if worker is ready
-         */
-        isReady() {
-          return this.isInitialized && this.workerManager.getStatus().isHealthy;
-        }
-        // ============================================================================
-        // Vector Operations
-        // ============================================================================
-        /**
-         * Calculate cosine similarities between job vector and bullet vectors
-         */
-        async calculateSimilarities(jobVector, bulletVectors, selectedVectors = []) {
-          this.ensureInitialized();
-          try {
-            const request = {
-              jobVector,
-              bulletVectors,
-              selectedVectors
-            };
-            const response = await this.workerManager.sendMessage(
-              "vector_operation",
-              request,
-              2e3
-              // 2s timeout for vector operations
-            );
-            if (!response.success || !response.data) {
-              throw new Error(response.error || "Vector operation failed");
-            }
-            return response.data;
-          } catch (error) {
-            console.error("Vector similarity calculation failed:", error);
-            throw new Error(`Similarity calculation failed: ${error instanceof Error ? error.message : "Unknown error"}`);
-          }
-        }
-        // ============================================================================
-        // Recommendation Generation
-        // ============================================================================
-        /**
-         * Generate recommendations for a job description
-         */
-        async generateRecommendations(jobVector, projects, bullets, roleLimit, maxPerProject = 1, functionBias = "general") {
-          this.ensureInitialized();
-          try {
-            const weights = this.getWeightsForBias(functionBias);
-            const request = {
-              jobVector,
-              projects,
-              bullets,
-              maxPerProject,
-              roleLimit,
-              weights
-            };
-            const response = await this.workerManager.sendMessage(
-              "recommendation",
-              request,
-              5e3
-              // 5s timeout for full recommendation
-            );
-            if (!response.success || !response.data) {
-              throw new Error(response.error || "Recommendation generation failed");
-            }
-            return response.data;
-          } catch (error) {
-            console.error("Recommendation generation failed:", error);
-            if (error instanceof Error && error.message.includes("timeout")) {
-              throw new Error("Recommendation generation timed out. Try reducing the number of bullets or simplifying the job description.");
-            }
-            throw new Error(`Recommendation failed: ${error instanceof Error ? error.message : "Unknown error"}`);
-          }
-        }
-        /**
-         * Rank projects by relevance to job description
-         */
-        async rankProjects(jobVector, projects, functionBias = "general") {
-          const result = await this.generateRecommendations(
-            jobVector,
-            projects,
-            [],
-            // No bullets needed for project ranking only
-            999,
-            // High role limit
-            1,
-            functionBias
-          );
-          return result.projectScores;
-        }
-        // ============================================================================
-        // Utility Methods
-        // ============================================================================
-        /**
-         * Get algorithm weights for function bias
-         */
-        getWeightsForBias(bias) {
-          return { ...FUNCTION_BIAS_WEIGHTS[bias] };
-        }
-        /**
-         * Ensure worker is initialized
-         */
-        ensureInitialized() {
-          if (!this.isInitialized) {
-            throw new Error("Worker communication not initialized. Call initialize() first.");
-          }
-          if (!this.workerManager.getStatus().isHealthy) {
-            throw new Error("Worker is not healthy. Check worker status.");
-          }
-        }
-        /**
-         * Get worker status and performance metrics
-         */
-        getStatus() {
-          const status = this.workerManager.getStatus();
-          return {
-            isReady: this.isReady(),
-            ...status
-          };
-        }
-        /**
-         * Perform manual health check
-         */
-        async healthCheck() {
-          if (!this.isInitialized) {
-            return false;
-          }
-          try {
-            const response = await this.workerManager.sendMessage("health_check", {}, 2e3);
-            return response.success;
-          } catch (error) {
-            console.warn("Manual health check failed:", error);
-            return false;
-          }
-        }
-        /**
-         * Terminate worker and cleanup resources
-         */
-        terminate() {
-          if (this.workerManager) {
-            this.workerManager.terminate();
-            this.isInitialized = false;
-          }
-        }
-      };
-      globalWorkerCommunication = null;
+      ];
     }
   });
+
+  // src/ui/experience-tab.ts
+  var experience_tab_exports = {};
+  __export(experience_tab_exports, {
+    ExperienceTab: () => ExperienceTab
+  });
+  var ExperienceTab;
+  var init_experience_tab = __esm({
+    "src/ui/experience-tab.ts"() {
+      "use strict";
+      init_xss_safe_rendering();
+      init_bullets_table();
+      init_sample_data();
+      ExperienceTab = class {
+        container;
+        state = {
+          currentSubTab: "bullets",
+          lastUpdate: Date.now()
+        };
+        bulletsTable = null;
+        constructor(container) {
+          this.container = container;
+        }
+        // ============================================================================
+        // Public Interface
+        // ============================================================================
+        /**
+         * Render the complete Experience tab
+         */
+        render() {
+          this.container.innerHTML = "";
+          const tabContainer = createSafeElement("div", "", "experience-tab");
+          const header = this.createHeader();
+          tabContainer.appendChild(header);
+          const subNav = this.createSubNavigation();
+          tabContainer.appendChild(subNav);
+          const content = this.createMainContent();
+          tabContainer.appendChild(content);
+          this.container.appendChild(tabContainer);
+        }
+        /**
+         * Switch to specific sub-tab
+         */
+        switchSubTab(subTab) {
+          this.state.currentSubTab = subTab;
+          this.state.lastUpdate = Date.now();
+          this.render();
+        }
+        /**
+         * Get current tab state
+         */
+        getState() {
+          return { ...this.state };
+        }
+        // ============================================================================
+        // Header and Summary
+        // ============================================================================
+        /**
+         * Create tab header with embedding state summary
+         */
+        createHeader() {
+          const header = createSafeElement("div", "", "experience-header");
+          const title = createSafeElement("h2", "Experience Management", "section-title");
+          const summary = this.createEmbeddingStateSummary();
+          header.appendChild(title);
+          header.appendChild(summary);
+          return header;
+        }
+        /**
+         * Create embedding state summary display
+         */
+        createEmbeddingStateSummary() {
+          const summaryContainer = createSafeElement("div", "", "embedding-summary");
+          const stateSummary = getEmbeddingStateSummary();
+          const summaryText = createSafeElement("p", "", "summary-text");
+          setSafeTextContent(
+            summaryText,
+            `${stateSummary.total} bullet points: ${stateSummary.ready} ready, ${stateSummary.pending} pending, ${stateSummary.stale} stale, ${stateSummary.failed} failed`
+          );
+          const badgesContainer = createSafeElement("div", "", "state-badges");
+          const stateTypes = [
+            { key: "ready", label: "Ready", count: stateSummary.ready, class: "ready" },
+            { key: "pending", label: "Pending", count: stateSummary.pending, class: "pending" },
+            { key: "stale", label: "Stale", count: stateSummary.stale, class: "stale" },
+            { key: "failed", label: "Failed", count: stateSummary.failed, class: "failed" }
+          ];
+          stateTypes.forEach((state) => {
+            const badge = createSafeElement("span", "", `summary-badge summary-badge--${state.class}`);
+            setSafeTextContent(badge, `${state.label}: ${state.count}`);
+            badgesContainer.appendChild(badge);
+          });
+          summaryContainer.appendChild(summaryText);
+          summaryContainer.appendChild(badgesContainer);
+          return summaryContainer;
+        }
+        // ============================================================================
+        // Sub-Navigation
+        // ============================================================================
+        /**
+         * Create sub-navigation for Bullets/Projects views
+         */
+        createSubNavigation() {
+          const nav = createSafeElement("nav", "", "experience-sub-nav");
+          const navList = createSafeElement("ul", "", "sub-nav-list");
+          const bulletsItem = this.createSubNavItem("bullets", "Bullet Points", this.state.currentSubTab === "bullets");
+          const projectsItem = this.createSubNavItem("projects", "Projects", this.state.currentSubTab === "projects");
+          navList.appendChild(bulletsItem);
+          navList.appendChild(projectsItem);
+          nav.appendChild(navList);
+          return nav;
+        }
+        /**
+         * Create individual sub-navigation item
+         */
+        createSubNavItem(view, label, isActive) {
+          const listItem = createSafeElement("li", "", "sub-nav-item");
+          const button = document.createElement("button");
+          button.className = `sub-nav-button ${isActive ? "sub-nav-button--active" : ""}`;
+          setSafeTextContent(button, label);
+          button.addEventListener("click", () => {
+            this.switchSubTab(view);
+          });
+          listItem.appendChild(button);
+          return listItem;
+        }
+        // ============================================================================
+        // Main Content
+        // ============================================================================
+        /**
+         * Create main content area
+         */
+        createMainContent() {
+          const content = createSafeElement("div", "", "experience-content");
+          if (this.state.currentSubTab === "bullets") {
+            const tableContainer = this.createBulletsView();
+            content.appendChild(tableContainer);
+          } else {
+            const projectsView = this.createProjectsView();
+            content.appendChild(projectsView);
+          }
+          return content;
+        }
+        /**
+         * Create bullets table view
+         */
+        createBulletsView() {
+          const container = createSafeElement("div", "", "bullets-view");
+          const { bullets, roles, projects } = getSampleDataset();
+          this.bulletsTable = new BulletsTable(container);
+          container.addEventListener("sort-change", (event) => {
+            const customEvent = event;
+            console.log("Sort changed:", customEvent.detail);
+          });
+          this.bulletsTable.render(bullets, roles, projects);
+          return container;
+        }
+        /**
+         * Create projects overview view
+         */
+        createProjectsView() {
+          const container = createSafeElement("div", "", "projects-view");
+          const table = this.createProjectsTable();
+          container.appendChild(table);
+          return container;
+        }
+        // ============================================================================
+        // Projects Table
+        // ============================================================================
+        /**
+         * Create projects overview table
+         */
+        createProjectsTable() {
+          const tableContainer = createSafeElement("div", "", "table-container");
+          const table = createSafeElement("table", "", "projects-table");
+          const thead = this.createProjectsTableHeader();
+          const tbody = this.createProjectsTableBody();
+          table.appendChild(thead);
+          table.appendChild(tbody);
+          tableContainer.appendChild(table);
+          return tableContainer;
+        }
+        /**
+         * Create projects table header
+         */
+        createProjectsTableHeader() {
+          const thead = createSafeElement("thead", "", "table-header");
+          const headerRow = createSafeElement("tr", "", "header-row");
+          const headers = [
+            { text: "Role", class: "role-header" },
+            { text: "Project Name", class: "project-header" },
+            { text: "# Bullets", class: "count-header" },
+            { text: "Description", class: "description-header" }
+          ];
+          headers.forEach((header) => {
+            const th = createSafeElement("th", header.text, header.class);
+            headerRow.appendChild(th);
+          });
+          thead.appendChild(headerRow);
+          return thead;
+        }
+        /**
+         * Create projects table body with deterministic ordering
+         */
+        createProjectsTableBody() {
+          const tbody = createSafeElement("tbody", "", "table-body");
+          const { roles, projects } = getSampleDataset();
+          const sortedProjects = projects.slice().sort((a, b) => {
+            const roleA = roles.find((r) => r.id === a.roleId);
+            const roleB = roles.find((r) => r.id === b.roleId);
+            if (roleA && roleB) {
+              if (roleA.orderIndex !== roleB.orderIndex) {
+                return roleA.orderIndex - roleB.orderIndex;
+              }
+            }
+            return a.name.localeCompare(b.name);
+          });
+          sortedProjects.forEach((project) => {
+            const role = roles.find((r) => r.id === project.roleId);
+            if (role) {
+              const row = this.createProjectRow(project, role);
+              tbody.appendChild(row);
+            }
+          });
+          return tbody;
+        }
+        /**
+         * Create individual project row
+         */
+        createProjectRow(project, role) {
+          const row = createSafeElement("tr", "", "project-row");
+          const roleCell = createSafeElement("td", "", "role-cell");
+          setSafeTextContent(roleCell, `${role.title} - ${role.company}`);
+          const nameCell = createSafeElement("td", "", "name-cell");
+          setSafeTextContent(nameCell, project.name);
+          const countCell = createSafeElement("td", "", "count-cell");
+          setSafeTextContent(countCell, project.bulletCount.toString());
+          const descCell = createSafeElement("td", "", "description-cell");
+          const description = project.description || "No description";
+          const truncatedDesc = description.length > 60 ? description.substring(0, 60) + "..." : description;
+          setSafeTextContent(descCell, truncatedDesc);
+          descCell.title = description;
+          row.appendChild(roleCell);
+          row.appendChild(nameCell);
+          row.appendChild(countCell);
+          row.appendChild(descCell);
+          return row;
+        }
+      };
+    }
+  });
+
+  // src/ui/app.ts
+  init_xss_safe_rendering();
+  var TAB_CONFIGS = [
+    {
+      id: "application",
+      label: "New Application",
+      icon: "\u{1F4DD}",
+      description: "Generate recommendations for a job application"
+    },
+    {
+      id: "experience",
+      label: "Experience",
+      icon: "\u{1F4BC}",
+      description: "Manage your bullet points and projects"
+    },
+    {
+      id: "settings",
+      label: "Settings",
+      icon: "\u2699\uFE0F",
+      description: "Configure API key and data management"
+    }
+  ];
+  var ResuumApp = class {
+    state = {
+      currentTab: "application",
+      loading: false
+    };
+    container;
+    tabNavigation = null;
+    tabContent = null;
+    statusBar = null;
+    constructor(containerId) {
+      const container = document.getElementById(containerId);
+      if (!container) {
+        throw new Error(`Container element with id "${containerId}" not found`);
+      }
+      this.container = container;
+    }
+    // ============================================================================
+    // Initialization
+    // ============================================================================
+    /**
+     * Initialize the application UI
+     */
+    async initialize() {
+      try {
+        this.showLoading("Initializing Resuum...");
+        this.container.innerHTML = "";
+        this.buildUIStructure();
+        await this.switchTab("application");
+        this.hideLoading();
+        this.showSuccess("Resuum initialized successfully");
+      } catch (error) {
+        this.showError(`Failed to initialize: ${error instanceof Error ? error.message : "Unknown error"}`);
+      }
+    }
+    /**
+     * Build the main UI structure
+     */
+    buildUIStructure() {
+      this.container.innerHTML = "";
+      const sidebarNav = document.getElementById("sidebar-nav");
+      if (sidebarNav) {
+        const navigation = this.createTabNavigation();
+        sidebarNav.appendChild(navigation);
+        this.tabNavigation = navigation;
+      }
+      const content = this.createTabContent();
+      const status = this.createStatusBar();
+      this.container.appendChild(content);
+      this.container.appendChild(status);
+      this.tabContent = content;
+      this.statusBar = status;
+    }
+    /**
+     * Create application header
+     */
+    createHeader() {
+      const header = createSafeElement("header", "", "app-header");
+      const title = createSafeElement("h1", "Resuum", "app-title");
+      const subtitle = createSafeElement("p", "AI-Powered Resume Optimization", "app-subtitle");
+      header.appendChild(title);
+      header.appendChild(subtitle);
+      return header;
+    }
+    /**
+     * Create tab navigation
+     */
+    createTabNavigation() {
+      const nav = createSafeElement("nav", "", "tab-navigation");
+      const tabList = createSafeElement("ul", "", "tab-list");
+      TAB_CONFIGS.forEach((tabConfig) => {
+        const tabItem = this.createTabItem(tabConfig);
+        tabList.appendChild(tabItem);
+      });
+      nav.appendChild(tabList);
+      return nav;
+    }
+    /**
+     * Create individual tab item
+     */
+    createTabItem(config) {
+      const listItem = createSafeElement("li", "", "tab-item");
+      const button = document.createElement("button");
+      button.className = `tab-button ${this.state.currentTab === config.id ? "tab-button--active" : ""}`;
+      button.setAttribute("data-tab", config.id);
+      button.setAttribute("aria-label", config.description);
+      const icon = createSafeElement("span", config.icon, "tab-icon");
+      const label = createSafeElement("span", config.label, "tab-label");
+      button.appendChild(icon);
+      button.appendChild(label);
+      button.addEventListener("click", () => {
+        this.switchTab(config.id);
+      });
+      button.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          this.switchTab(config.id);
+        }
+      });
+      listItem.appendChild(button);
+      return listItem;
+    }
+    /**
+     * Create tab content container
+     */
+    createTabContent() {
+      return createSafeElement("div", "", "tab-content");
+    }
+    /**
+     * Create status bar
+     */
+    createStatusBar() {
+      return createSafeElement("div", "", "status-bar");
+    }
+    // ============================================================================
+    // Tab Management
+    // ============================================================================
+    /**
+     * Switch to a different tab
+     */
+    async switchTab(tabName) {
+      try {
+        this.state.currentTab = tabName;
+        this.updateTabNavigation();
+        await this.loadTabContent(tabName);
+      } catch (error) {
+        this.showError(`Failed to switch to ${tabName} tab: ${error instanceof Error ? error.message : "Unknown error"}`);
+      }
+    }
+    /**
+     * Update tab navigation visual state
+     */
+    updateTabNavigation() {
+      if (!this.tabNavigation) return;
+      const buttons = this.tabNavigation.querySelectorAll(".tab-button");
+      buttons.forEach((button) => {
+        const isActive = button.getAttribute("data-tab") === this.state.currentTab;
+        button.classList.toggle("tab-button--active", isActive);
+        button.setAttribute("aria-selected", isActive.toString());
+      });
+    }
+    /**
+     * Load content for the current tab
+     */
+    async loadTabContent(tabName) {
+      if (!this.tabContent) return;
+      this.tabContent.innerHTML = "";
+      switch (tabName) {
+        case "application":
+          this.loadApplicationTab();
+          break;
+        case "experience":
+          this.loadExperienceTab();
+          break;
+        case "settings":
+          this.loadSettingsTab();
+          break;
+        default:
+          throw new Error(`Unknown tab: ${tabName}`);
+      }
+    }
+    /**
+     * Load New Application tab content
+     */
+    loadApplicationTab() {
+      if (!this.tabContent) return;
+      const container = createSafeElement("div", "", "application-tab");
+      const jobSection = createSafeElement("section", "", "job-input-section");
+      const jobTitle = createSafeElement("h2", "Job Application", "section-title");
+      const jobForm = this.createJobInputForm();
+      jobSection.appendChild(jobTitle);
+      jobSection.appendChild(jobForm);
+      const resultsSection = createSafeElement("section", "", "results-section hidden");
+      const resultsTitle = createSafeElement("h2", "Recommendations", "section-title");
+      const resultsContainer = createSafeElement("div", "", "results-container");
+      resultsSection.appendChild(resultsTitle);
+      resultsSection.appendChild(resultsContainer);
+      container.appendChild(jobSection);
+      container.appendChild(resultsSection);
+      this.tabContent.appendChild(container);
+    }
+    /**
+     * Create job input form
+     */
+    createJobInputForm() {
+      const form = createSafeElement("form", "", "job-input-form");
+      const titleGroup = createSafeElement("div", "", "form-group");
+      const titleLabel = createSafeElement("label", "Job Title", "form-label");
+      titleLabel.setAttribute("for", "job-title");
+      const titleInput = document.createElement("input");
+      titleInput.type = "text";
+      titleInput.id = "job-title";
+      titleInput.className = "form-input";
+      titleInput.placeholder = "e.g., Senior Product Manager";
+      titleGroup.appendChild(titleLabel);
+      titleGroup.appendChild(titleInput);
+      const descGroup = createSafeElement("div", "", "form-group");
+      const descLabel = createSafeElement("label", "Job Description", "form-label");
+      descLabel.setAttribute("for", "job-description");
+      const descTextarea = document.createElement("textarea");
+      descTextarea.id = "job-description";
+      descTextarea.className = "form-textarea";
+      descTextarea.placeholder = "Paste the job description here...";
+      descTextarea.rows = 8;
+      descGroup.appendChild(descLabel);
+      descGroup.appendChild(descTextarea);
+      const biasGroup = createSafeElement("div", "", "form-group");
+      const biasLabel = createSafeElement("label", "Function Bias", "form-label");
+      biasLabel.setAttribute("for", "function-bias");
+      const biasSelect = document.createElement("select");
+      biasSelect.id = "function-bias";
+      biasSelect.className = "form-select";
+      const biasOptions = [
+        { value: "general", label: "General" },
+        { value: "technical", label: "Technical" },
+        { value: "business_strategy", label: "Business Strategy" },
+        { value: "marketing", label: "Marketing" },
+        { value: "operations", label: "Operations" }
+      ];
+      biasOptions.forEach((option) => {
+        const optionElement = document.createElement("option");
+        optionElement.value = option.value;
+        setSafeTextContent(optionElement, option.label);
+        biasSelect.appendChild(optionElement);
+      });
+      biasGroup.appendChild(biasLabel);
+      biasGroup.appendChild(biasSelect);
+      const submitButton = document.createElement("button");
+      submitButton.type = "submit";
+      submitButton.className = "form-submit";
+      setSafeTextContent(submitButton, "Generate Recommendations");
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        this.handleJobSubmission(titleInput.value, descTextarea.value, biasSelect.value);
+      });
+      form.appendChild(titleGroup);
+      form.appendChild(descGroup);
+      form.appendChild(biasGroup);
+      form.appendChild(submitButton);
+      return form;
+    }
+    /**
+     * Load Experience tab content
+     */
+    loadExperienceTab() {
+      if (!this.tabContent) return;
+      console.log("Loading Experience tab...");
+      try {
+        Promise.resolve().then(() => (init_experience_tab(), experience_tab_exports)).then(({ ExperienceTab: ExperienceTab2 }) => {
+          if (this.tabContent) {
+            console.log("Creating ExperienceTab instance...");
+            const experienceTab = new ExperienceTab2(this.tabContent);
+            experienceTab.render();
+            console.log("ExperienceTab rendered successfully");
+          }
+        }).catch((error) => {
+          console.error("Dynamic import failed:", error);
+          if (this.tabContent) {
+            this.tabContent.innerHTML = `<div style="color: red; padding: 1rem;">
+                Failed to load Experience tab: ${error.message}
+            </div>`;
+          }
+        });
+      } catch (error) {
+        console.error("Experience tab error:", error);
+        if (this.tabContent) {
+          this.tabContent.innerHTML = `<div style="color: red; padding: 1rem;">
+            Experience tab error: ${error instanceof Error ? error.message : "Unknown error"}
+            </div>`;
+        }
+      }
+    }
+    /**
+     * Load Settings tab content  
+     */
+    loadSettingsTab() {
+      if (!this.tabContent) return;
+      const container = createSafeElement("div", "", "settings-tab");
+      const placeholder = createSafeElement("div", "Settings configuration coming soon...", "tab-placeholder");
+      container.appendChild(placeholder);
+      this.tabContent.appendChild(container);
+    }
+    // ============================================================================
+    // Event Handlers
+    // ============================================================================
+    /**
+     * Handle job submission
+     */
+    async handleJobSubmission(title, description, bias) {
+      try {
+        this.showLoading("Generating recommendations...");
+        await new Promise((resolve) => setTimeout(resolve, 2e3));
+        this.showSuccess("Recommendations generated successfully!");
+      } catch (error) {
+        this.showError(`Failed to generate recommendations: ${error instanceof Error ? error.message : "Unknown error"}`);
+      }
+    }
+    // ============================================================================
+    // State Management
+    // ============================================================================
+    /**
+     * Show loading state
+     */
+    showLoading(message) {
+      this.state.loading = true;
+      this.state.error = void 0;
+      this.state.success = void 0;
+      this.updateStatusBar(message, "loading");
+    }
+    /**
+     * Hide loading state
+     */
+    hideLoading() {
+      this.state.loading = false;
+      this.updateStatusBar("", "hidden");
+    }
+    /**
+     * Show error message
+     */
+    showError(message) {
+      this.state.loading = false;
+      this.state.error = message;
+      this.state.success = void 0;
+      this.updateStatusBar(message, "error");
+    }
+    /**
+     * Show success message
+     */
+    showSuccess(message) {
+      this.state.loading = false;
+      this.state.error = void 0;
+      this.state.success = message;
+      this.updateStatusBar(message, "success");
+      setTimeout(() => {
+        if (this.state.success === message) {
+          this.hideLoading();
+        }
+      }, 3e3);
+    }
+    /**
+     * Update status bar
+     */
+    updateStatusBar(message, type) {
+      if (!this.statusBar) return;
+      this.statusBar.innerHTML = "";
+      this.statusBar.className = `status-bar status-bar--${type}`;
+      if (type !== "hidden" && message) {
+        let element;
+        switch (type) {
+          case "loading":
+            element = createSafeElement("div", `\u23F3 ${message}`, "status-message");
+            break;
+          case "error":
+            element = createErrorElement(message);
+            break;
+          case "success":
+            element = createSuccessElement(`\u2713 ${message}`);
+            break;
+          default:
+            element = createSafeElement("div", message, "status-message");
+        }
+        this.statusBar.appendChild(element);
+      }
+    }
+    // ============================================================================
+    // Public API
+    // ============================================================================
+    /**
+     * Get current application state
+     */
+    getState() {
+      return { ...this.state };
+    }
+    /**
+     * Navigate to specific tab programmatically
+     */
+    async navigateToTab(tabName) {
+      await this.switchTab(tabName);
+    }
+  };
 
   // src/main.ts
-  console.log("Testing worker architecture...");
-  Promise.resolve().then(() => (init_worker_communication(), worker_communication_exports)).then(async (workerComm) => {
-    console.log("Worker communication imported successfully");
-    try {
-      const workerUrl = window.WORKER_URL;
-      console.log("Worker URL available:", !!workerUrl);
-      if (workerUrl) {
-        await workerComm.initializeWorker();
-        console.log("Worker initialized successfully");
-        const isHealthy = await workerComm.checkWorkerHealth();
-        console.log("Worker health:", isHealthy);
-        const jobVector = new Float32Array([0.1, 0.2, 0.3]);
-        const bulletVectors = [
-          new Float32Array([0.2, 0.1, 0.4]),
-          new Float32Array([0.1, 0.3, 0.2])
-        ];
-        const vectorResult = await workerComm.calculateSimilarities(
-          jobVector,
-          bulletVectors
-        );
-        console.log("Vector operation result:", vectorResult);
-        const appContainer = document.getElementById("app");
-        if (appContainer) {
-          appContainer.innerHTML = `
-          <div style="color: green; font-weight: bold; font-size: 18px;">
-            \u2705 Worker Architecture Working!
-          </div>
-          <div style="margin-top: 1rem;">
-            <strong>Worker Status:</strong>
-            <ul>
-              <li>Worker URL: Available \u2705</li>
-              <li>Communication: Working \u2705</li>
-              <li>Health: ${isHealthy ? "Healthy" : "Issues"} \u2705</li>
-              <li>Vector Operations: Working \u2705</li>
-              <li>Similarities: ${vectorResult.similarities.length} calculated \u2705</li>
-            </ul>
-          </div>
-          <div style="margin-top: 1rem; color: blue;">
-            <strong>Step 4 Complete:</strong> Worker architecture functional with crash handling
-          </div>
-        `;
-        }
-      } else {
-        throw new Error("Worker URL not available - build system may not have created it");
-      }
-    } catch (error) {
-      console.error("Worker test failed:", error);
-      const appContainer = document.getElementById("app");
-      if (appContainer) {
-        appContainer.innerHTML = `<div style="color: red;">Worker test failed: ${error instanceof Error ? error.message : "Unknown error"}</div>`;
-      }
+  console.log("Main.ts loaded - initializing app...");
+  var loadingDiv = document.getElementById("loading");
+  if (loadingDiv) {
+    loadingDiv.remove();
+  }
+  try {
+    const app = new ResuumApp("app");
+    app.initialize();
+    console.log("ResuumApp initialized successfully");
+  } catch (error) {
+    console.error("App initialization failed:", error);
+    const container = document.getElementById("app");
+    if (container) {
+      container.innerHTML = `<div style="color: red; padding: 1rem;">
+      App failed to load: ${error instanceof Error ? error.message : "Unknown error"}
+      <br><br>
+      Check browser console for details.
+    </div>`;
     }
-  }).catch((error) => {
-    console.error("Worker communication import failed:", error);
-    const appContainer = document.getElementById("app");
-    if (appContainer) {
-      appContainer.innerHTML = `<div style="color: red;">Worker import failed: ${error instanceof Error ? error.message : "Unknown error"}</div>`;
-    }
-  });
+  }
 })();
 
-        
-        // Initialize the application
-        console.log('Resuum starting with TypeScript integration...');
-        
-        // Remove loading message
-        const loadingDiv = document.getElementById('loading');
-        if (loadingDiv) {
-            loadingDiv.remove();
-        }
-        
-        // Start the TypeScript application
-        try {
-            if (typeof ResuumApp !== 'undefined' && ResuumApp.initialize) {
-                ResuumApp.initialize('app');
-                console.log('TypeScript Resuum initialized successfully');
-            } else {
-                // Fallback to simple UI if TypeScript compilation failed
-                createFallbackUI();
-            }
-        } catch (error) {
-            console.error('TypeScript initialization failed, using fallback:', error);
-            createFallbackUI();
-        }
-        
-        function createFallbackUI() {
-            const appContainer = document.getElementById('app');
-            if (!appContainer) return;
-            
-            appContainer.innerHTML = `
-                <nav class="tab-navigation">
-                    <ul class="tab-list">
-                        <li class="tab-item">
-                            <button class="tab-button tab-button--active" data-tab="application">
-                                📝 New Application
-                            </button>
-                        </li>
-                        <li class="tab-item">
-                            <button class="tab-button" data-tab="experience">
-                                💼 Experience
-                            </button>
-                        </li>
-                        <li class="tab-item">
-                            <button class="tab-button" data-tab="settings">
-                                ⚙️ Settings
-                            </button>
-                        </li>
-                    </ul>
-                </nav>
-                
-                <div class="tab-content" id="tab-content">
-                    <div id="application-tab">
-                        <h2>New Job Application</h2>
-                        <p>Paste your job description here and get AI-powered resume recommendations.</p>
-                        <div style="margin: 1rem 0;">
-                            <label for="job-description" style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Job Description:</label>
-                            <textarea 
-                                id="job-description" 
-                                placeholder="Paste the job description here..."
-                                style="width: 100%; height: 200px; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; font-family: inherit;"
-                            ></textarea>
-                        </div>
-                        <button 
-                            onclick="analyzeJob()" 
-                            style="background: #3b82f6; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 4px; cursor: pointer; font-size: 1rem;"
-                        >
-                            Generate Recommendations
-                        </button>
-                        <div id="recommendations" style="margin-top: 2rem;"></div>
-                    </div>
-                </div>
-            `;
-            
-            // Add tab switching functionality
-            const tabButtons = document.querySelectorAll('.tab-button');
-            
-            tabButtons.forEach(button => {
-                button.addEventListener('click', () => {
-                    // Remove active class from all buttons
-                    tabButtons.forEach(btn => btn.classList.remove('tab-button--active'));
-                    // Add active class to clicked button
-                    button.classList.add('tab-button--active');
-                    
-                    // Switch tab content
-                    const tabName = button.getAttribute('data-tab');
-                    switchTab(tabName);
-                });
-            });
-        }
-        
-        function switchTab(tabName) {
-            const tabContent = document.getElementById('tab-content');
-            if (!tabContent) return;
-            
-            switch (tabName) {
-                case 'application':
-                    tabContent.innerHTML = `
-                        <div id="application-tab">
-                            <h2>New Job Application</h2>
-                            <p>Paste your job description here and get AI-powered resume recommendations.</p>
-                            <div style="margin: 1rem 0;">
-                                <label for="job-description" style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Job Description:</label>
-                                <textarea 
-                                    id="job-description" 
-                                    placeholder="Paste the job description here..."
-                                    style="width: 100%; height: 200px; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; font-family: inherit;"
-                                ></textarea>
-                            </div>
-                            <button 
-                                onclick="analyzeJob()" 
-                                style="background: #3b82f6; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 4px; cursor: pointer; font-size: 1rem;"
-                            >
-                                Generate Recommendations
-                            </button>
-                            <div id="recommendations" style="margin-top: 2rem;"></div>
-                        </div>
-                    `;
-                    break;
-                case 'experience':
-                    showExperienceTab();
-                    break;
-                case 'settings':
-                    tabContent.innerHTML = `
-                        <div id="settings-tab">
-                            <h2>Settings</h2>
-                            <p>Configure your API keys and application preferences.</p>
-                            <div style="margin: 1rem 0;">
-                                <label for="openai-key" style="display: block; margin-bottom: 0.5rem; font-weight: 500;">OpenAI API Key:</label>
-                                <input 
-                                    type="password" 
-                                    id="openai-key" 
-                                    placeholder="sk-..."
-                                    style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; font-family: inherit;"
-                                />
-                                <small style="color: #666; display: block; margin-top: 0.25rem;">
-                                    Your API key is stored locally and never sent to our servers.
-                                </small>
-                            </div>
-                            <button style="background: #3b82f6; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 4px; cursor: pointer; font-size: 1rem;">
-                                Save Settings
-                            </button>
-                        </div>
-                    `;
-                    break;
-            }
-        }
-        
-        function showExperienceTab() {
-            const tabContent = document.getElementById('tab-content');
-            if (!tabContent) return;
-            
-            tabContent.innerHTML = `
-                <div id="experience-tab">
-                    <div class="experience-header">
-                        <h2 class="section-title">Experience Management</h2>
-                        <div class="embedding-summary">
-                            <p class="summary-text">2 bullet points: 1 ready, 1 pending, 0 stale, 0 failed</p>
-                        </div>
-                    </div>
-                    
-                    <nav class="experience-sub-nav">
-                        <ul class="sub-nav-list">
-                            <li><button class="sub-nav-button sub-nav-button--active" onclick="showBullets()">Bullet Points</button></li>
-                            <li><button class="sub-nav-button" onclick="showProjects()">Projects</button></li>
-                        </ul>
-                    </nav>
-                    
-                    <div id="experience-content">
-                        <div class="table-controls">
-                            <label>Sort by:</label>
-                            <select class="sort-select">
-                                <option value="role">Role (Chronological)</option>
-                                <option value="project">Project Name</option>
-                                <option value="created">Created Date</option>
-                            </select>
-                        </div>
-                        
-                        <table class="bullets-table">
-                            <thead>
-                                <tr>
-                                    <th>Role</th>
-                                    <th>Project</th>
-                                    <th>Bullet Text</th>
-                                    <th>State</th>
-                                    <th>Quality</th>
-                                    <th>Created</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <tr>
-                                    <td>Senior Consultant - McKinsey & Company</td>
-                                    <td>Global Telecom Transformation</td>
-                                    <td>Led cross-functional team of 12 engineers to develop 5G infrastructure...</td>
-                                    <td><span class="state-badge state-badge--ready">✅ Ready</span></td>
-                                    <td><div class="quality-indicators"><span class="quality-indicator active" title="Has quantified results">📊</span><span class="quality-indicator active" title="Strong action verb">⚡</span><span class="quality-indicator active" title="Appropriate length">📏</span></div></td>
-                                    <td>1/1/2023</td>
-                                </tr>
-                                <tr>
-                                    <td>Senior Consultant - McKinsey & Company</td>
-                                    <td>Global Telecom Transformation</td>
-                                    <td>Designed go-to-market strategy for new network services...</td>
-                                    <td><span class="state-badge state-badge--pending">⏳ Pending</span></td>
-                                    <td><div class="quality-indicators"><span class="quality-indicator active" title="Has quantified results">📊</span><span class="quality-indicator active" title="Strong action verb">⚡</span><span class="quality-indicator active" title="Appropriate length">📏</span></div></td>
-                                    <td>1/1/2023</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            `;
-        }
-        
-        function showBullets() {
-            const buttons = document.querySelectorAll('.sub-nav-button');
-            buttons.forEach(btn => btn.classList.remove('sub-nav-button--active'));
-            buttons[0].classList.add('sub-nav-button--active');
-            showExperienceTab();
-        }
-        
-        function showProjects() {
-            const buttons = document.querySelectorAll('.sub-nav-button');
-            buttons.forEach(btn => btn.classList.remove('sub-nav-button--active'));
-            buttons[1].classList.add('sub-nav-button--active');
-            
-            document.getElementById('experience-content').innerHTML = `
-                <table class="bullets-table">
-                    <thead>
-                        <tr>
-                            <th>Role</th>
-                            <th>Project Name</th>
-                            <th># Bullets</th>
-                            <th>Description</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr>
-                            <td>Senior Consultant - McKinsey & Company</td>
-                            <td>Global Telecom Transformation</td>
-                            <td>2</td>
-                            <td>Core network modernization and go-to-market strategy</td>
-                        </tr>
-                    </tbody>
-                </table>
-            `;
-        }
-        
-        function analyzeJob() {
-            const textarea = document.getElementById('job-description');
-            const recommendationsDiv = document.getElementById('recommendations');
-            
-            if (!textarea || !recommendationsDiv) return;
-            
-            const jobText = textarea.value.trim();
-            
-            if (!jobText) {
-                recommendationsDiv.innerHTML = `
-                    <div class="error">
-                        <strong>Error:</strong> Please paste a job description first.
-                    </div>
-                `;
-                return;
-            }
-            
-            recommendationsDiv.innerHTML = `
-                <div class="success">
-                    <strong>Analysis Complete!</strong> Here are your recommended resume bullets:
-                    <ul style="margin: 1rem 0; padding-left: 2rem;">
-                        <li>Led cross-functional team of 12 engineers to develop 5G infrastructure demand forecast model, achieving 15% improvement in accuracy</li>
-                        <li>Designed go-to-market strategy for new network services, conducting market analysis across 8 regions</li>
-                    </ul>
-                    <button style="background: #10b981; color: white; border: none; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer;">
-                        Copy to Clipboard
-                    </button>
-                </div>
-            `;
-        }
     </script>
 </body>
 </html>
