@@ -54,6 +54,7 @@
             background-color: #f1f5f9;
             border-radius: 8px;
             padding: 4px;
+            margin: 0;
         }
         .tab-item {
             flex: 1;
@@ -82,6 +83,121 @@
             padding: 2rem;
             border-radius: 8px;
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            min-height: 400px;
+        }
+        
+        /* Experience Tab Styles */
+        .experience-header {
+            margin-bottom: 2rem;
+        }
+        .section-title {
+            color: #1e293b;
+            margin-bottom: 1rem;
+        }
+        .embedding-summary {
+            background: #f0f9ff;
+            border: 1px solid #0ea5e9;
+            padding: 1rem;
+            border-radius: 6px;
+            margin-bottom: 1.5rem;
+        }
+        .summary-text {
+            margin: 0;
+            font-weight: 500;
+        }
+        .experience-sub-nav {
+            margin-bottom: 1.5rem;
+        }
+        .sub-nav-list {
+            display: flex;
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            gap: 0.5rem;
+        }
+        .sub-nav-button {
+            padding: 0.5rem 1rem;
+            border: 1px solid #d1d5db;
+            background: white;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .sub-nav-button--active {
+            background: #3b82f6;
+            color: white;
+            border-color: #3b82f6;
+        }
+        .bullets-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+        }
+        .bullets-table th,
+        .bullets-table td {
+            padding: 0.75rem;
+            text-align: left;
+            border: 1px solid #e5e7eb;
+        }
+        .bullets-table th {
+            background: #f9fafb;
+            font-weight: 600;
+        }
+        .bullets-table tr:nth-child(even) {
+            background: #f9fafb;
+        }
+        .state-badge {
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+        .state-badge--ready {
+            background: #dcfce7;
+            color: #166534;
+        }
+        .state-badge--pending {
+            background: #fef3c7;
+            color: #92400e;
+        }
+        .state-badge--stale {
+            background: #fed7aa;
+            color: #9a3412;
+        }
+        .state-badge--failed {
+            background: #fecaca;
+            color: #991b1b;
+        }
+        .quality-indicators {
+            display: flex;
+            gap: 0.25rem;
+        }
+        .quality-indicator {
+            font-size: 1.2em;
+        }
+        .quality-indicator.active {
+            opacity: 1;
+        }
+        .quality-indicator.inactive {
+            opacity: 0.3;
+        }
+        .table-controls {
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .sort-select {
+            padding: 0.5rem;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+        }
+        .bullet-item {
+            padding: 0.75rem;
+            border: 1px solid #e5e7eb;
+            border-radius: 4px;
+            margin-bottom: 0.5rem;
+            background: white;
         }
     </style>
 </head>
@@ -100,10 +216,684 @@
     </div>
 
     <script>
-        // Define timeoutMs globally to prevent the error
-        const timeoutMs = 5000;
+        // Embedded TypeScript compiled code
+        "use strict";
+var ResuumApp = (() => {
+  var __defProp = Object.defineProperty;
+  var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __esm = (fn, res) => function __init() {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  };
+  var __export = (target, all) => {
+    for (var name in all)
+      __defProp(target, name, { get: all[name], enumerable: true });
+  };
+
+  // src/utils/worker-manager.ts
+  var RESTART_DELAY_BASE, MAX_RESTART_ATTEMPTS, HEALTH_CHECK_INTERVAL, MESSAGE_TIMEOUT, WorkerManager;
+  var init_worker_manager = __esm({
+    "src/utils/worker-manager.ts"() {
+      "use strict";
+      RESTART_DELAY_BASE = 200;
+      MAX_RESTART_ATTEMPTS = 1;
+      HEALTH_CHECK_INTERVAL = 3e4;
+      MESSAGE_TIMEOUT = 5e3;
+      WorkerManager = class {
+        worker = null;
+        workerScript = null;
+        pendingMessages = /* @__PURE__ */ new Map();
+        restartAttempts = 0;
+        isHealthy = true;
+        lastHealthCheck = 0;
+        healthCheckTimer = null;
+        messageIdCounter = 0;
+        config;
+        constructor(config = {}) {
+          this.config = {
+            workerScript: void 0,
+            enableHealthChecks: true,
+            enableCrashRecovery: true,
+            maxConcurrentOperations: 3,
+            ...config
+          };
+        }
+        // ============================================================================
+        // Worker Deployment Options
+        // ============================================================================
+        /**
+         * Initialize worker with automatic deployment option detection
+         */
+        async initialize(workerCode) {
+          try {
+            if (workerCode) {
+              await this.createBlobWorker(workerCode);
+              console.log("Worker deployed using Blob (inline mode)");
+              return;
+            }
+            if (this.config.workerScript) {
+              await this.createFileWorker(this.config.workerScript);
+              console.log("Worker deployed using separate file");
+              return;
+            }
+            throw new Error("No worker deployment option available");
+          } catch (error) {
+            console.error("Worker initialization failed:", error);
+            throw new Error(`Worker deployment failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+          }
+        }
+        /**
+         * Create worker from Blob (inline deployment)
+         */
+        async createBlobWorker(workerCode) {
+          try {
+            if (!("Blob" in globalThis) || !("URL" in globalThis) || !globalThis.URL.createObjectURL) {
+              throw new Error("Blob workers not supported");
+            }
+            const blob = new Blob([workerCode], { type: "application/javascript" });
+            const workerUrl = URL.createObjectURL(blob);
+            this.worker = new Worker(workerUrl);
+            this.workerScript = workerUrl;
+            await this.setupWorker();
+            setTimeout(() => {
+              URL.revokeObjectURL(workerUrl);
+            }, 1e3);
+          } catch (error) {
+            throw new Error(`Blob worker creation failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+          }
+        }
+        /**
+         * Create worker from separate file
+         */
+        async createFileWorker(scriptPath) {
+          try {
+            this.worker = new Worker(scriptPath);
+            this.workerScript = scriptPath;
+            await this.setupWorker();
+          } catch (error) {
+            throw new Error(`File worker creation failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+          }
+        }
+        /**
+         * Setup worker event handlers and health monitoring
+         */
+        async setupWorker() {
+          if (!this.worker) {
+            throw new Error("Worker not created");
+          }
+          this.worker.onmessage = (event) => {
+            this.handleWorkerMessage(event.data);
+          };
+          this.worker.onerror = (error) => {
+            console.error("Worker error detected:", error);
+            this.handleWorkerCrash(new Error(`Worker error: ${error instanceof ErrorEvent ? error.message : "Unknown error"}`));
+          };
+          this.worker.onmessageerror = (error) => {
+            console.error("Worker message error:", error);
+            this.handleWorkerCrash(new Error("Worker message error"));
+          };
+          await this.performHealthCheck();
+          if (this.config.enableHealthChecks) {
+            this.startHealthChecks();
+          }
+          console.log("Worker setup completed successfully");
+        }
+        // ============================================================================
+        // Message Handling and Timeout Management
+        // ============================================================================
+        /**
+         * Send message to worker with timeout handling
+         */
+        async sendMessage(type, data, timeoutMs = MESSAGE_TIMEOUT) {
+          if (!this.worker || !this.isHealthy) {
+            if (this.config.enableCrashRecovery && this.canRestart()) {
+              await this.restartWorker();
+            } else {
+              throw new Error("Worker not available");
+            }
+          }
+          if (this.pendingMessages.size >= this.config.maxConcurrentOperations) {
+            throw new Error(`Too many concurrent operations (max: ${this.config.maxConcurrentOperations})`);
+          }
+          const messageId = this.generateMessageId();
+          const message = {
+            type,
+            id: messageId,
+            data
+          };
+          return new Promise((resolve, reject) => {
+            const pending = {
+              id: messageId,
+              resolve,
+              reject,
+              timeout: Date.now() + timeoutMs,
+              timestamp: Date.now(),
+              operation: type
+            };
+            this.pendingMessages.set(messageId, pending);
+            const timeoutId = setTimeout(() => {
+              this.handleMessageTimeout(messageId);
+            }, timeoutMs);
+            try {
+              this.worker.postMessage(message);
+            } catch (error) {
+              clearTimeout(timeoutId);
+              this.pendingMessages.delete(messageId);
+              reject(new Error(`Failed to send message: ${error instanceof Error ? error.message : "Unknown error"}`));
+            }
+          });
+        }
+        /**
+         * Handle worker response messages
+         */
+        handleWorkerMessage(response) {
+          const pending = this.pendingMessages.get(response.id);
+          if (!pending) {
+            console.warn(`Received response for unknown message ID: ${response.id}`);
+            return;
+          }
+          this.pendingMessages.delete(response.id);
+          if (response.success) {
+            pending.resolve(response);
+          } else {
+            pending.reject(new Error(response.error || "Unknown worker error"));
+          }
+        }
+        /**
+         * Handle message timeout
+         */
+        handleMessageTimeout(messageId) {
+          const pending = this.pendingMessages.get(messageId);
+          if (pending) {
+            this.pendingMessages.delete(messageId);
+            pending.reject(new Error(`Operation timeout after ${MESSAGE_TIMEOUT}ms: ${pending.operation}`));
+            if (this.pendingMessages.size === 0) {
+              console.warn("Worker timeout detected, considering restart");
+              if (this.config.enableCrashRecovery && this.canRestart()) {
+                this.restartWorker().catch(console.error);
+              }
+            }
+          }
+        }
+        // ============================================================================
+        // Crash Detection and Recovery
+        // ============================================================================
+        /**
+         * Handle worker crash
+         */
+        handleWorkerCrash(error) {
+          console.error("Worker crash detected:", error);
+          this.isHealthy = false;
+          for (const [, pending] of this.pendingMessages) {
+            pending.reject(new Error(`Worker crashed: ${error.message}`));
+          }
+          this.pendingMessages.clear();
+          if (this.config.enableCrashRecovery && this.canRestart()) {
+            console.log("Attempting worker restart...");
+            this.restartWorker().catch(console.error);
+          }
+        }
+        /**
+         * Check if worker can be restarted
+         */
+        canRestart() {
+          return this.restartAttempts < MAX_RESTART_ATTEMPTS;
+        }
+        /**
+         * Restart worker with exponential backoff
+         */
+        async restartWorker() {
+          if (!this.canRestart()) {
+            throw new Error("Maximum restart attempts exceeded");
+          }
+          this.restartAttempts++;
+          const delay = RESTART_DELAY_BASE * Math.pow(2, this.restartAttempts - 1);
+          console.log(`Restarting worker in ${delay}ms (attempt ${this.restartAttempts}/${MAX_RESTART_ATTEMPTS})`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          try {
+            if (this.worker) {
+              this.worker.terminate();
+              this.worker = null;
+            }
+            if (this.workerScript) {
+              if (this.workerScript.startsWith("blob:")) {
+                throw new Error("Cannot restart Blob worker without original code");
+              } else {
+                await this.createFileWorker(this.workerScript);
+              }
+            }
+            this.isHealthy = true;
+            console.log("Worker restarted successfully");
+          } catch (error) {
+            console.error("Worker restart failed:", error);
+            throw error;
+          }
+        }
+        // ============================================================================
+        // Health Monitoring
+        // ============================================================================
+        /**
+         * Perform health check
+         */
+        async performHealthCheck() {
+          try {
+            const response = await this.sendMessage("health_check", {}, 2e3);
+            this.isHealthy = response.success;
+            this.lastHealthCheck = Date.now();
+            if (this.isHealthy) {
+              this.restartAttempts = 0;
+            }
+            return this.isHealthy;
+          } catch (error) {
+            console.warn("Health check failed:", error);
+            this.isHealthy = false;
+            return false;
+          }
+        }
+        /**
+         * Start periodic health checks
+         */
+        startHealthChecks() {
+          if (this.healthCheckTimer) {
+            clearInterval(this.healthCheckTimer);
+          }
+          this.healthCheckTimer = setInterval(() => {
+            this.performHealthCheck().catch(console.error);
+          }, HEALTH_CHECK_INTERVAL);
+        }
+        /**
+         * Stop health checks
+         */
+        stopHealthChecks() {
+          if (this.healthCheckTimer) {
+            clearInterval(this.healthCheckTimer);
+            this.healthCheckTimer = null;
+          }
+        }
+        // ============================================================================
+        // Public API Methods
+        // ============================================================================
+        /**
+         * Get worker status and performance metrics
+         */
+        getStatus() {
+          return {
+            isHealthy: this.isHealthy,
+            pendingOperations: this.pendingMessages.size,
+            restartAttempts: this.restartAttempts,
+            lastHealthCheck: this.lastHealthCheck
+          };
+        }
+        /**
+         * Terminate worker and cleanup resources
+         */
+        terminate() {
+          this.stopHealthChecks();
+          if (this.worker) {
+            this.worker.terminate();
+            this.worker = null;
+          }
+          if (this.workerScript && this.workerScript.startsWith("blob:")) {
+            try {
+              URL.revokeObjectURL(this.workerScript);
+            } catch (error) {
+            }
+          }
+          for (const [, pending] of this.pendingMessages) {
+            pending.reject(new Error("Worker terminated"));
+          }
+          this.pendingMessages.clear();
+          this.isHealthy = false;
+          this.restartAttempts = 0;
+          this.lastHealthCheck = 0;
+          this.workerScript = null;
+          console.log("Worker manager terminated and cleaned up");
+        }
+        // ============================================================================
+        // Utility Methods
+        // ============================================================================
+        /**
+         * Generate unique message ID
+         */
+        generateMessageId() {
+          return `msg_${Date.now()}_${++this.messageIdCounter}`;
+        }
+      };
+    }
+  });
+
+  // src/utils/worker-communication.ts
+  var worker_communication_exports = {};
+  __export(worker_communication_exports, {
+    WorkerCommunication: () => WorkerCommunication,
+    calculateSimilarities: () => calculateSimilarities,
+    checkWorkerHealth: () => checkWorkerHealth,
+    generateRecommendations: () => generateRecommendations,
+    getWorkerCommunication: () => getWorkerCommunication,
+    getWorkerStatus: () => getWorkerStatus,
+    initializeWorker: () => initializeWorker,
+    resetWorkerCommunication: () => resetWorkerCommunication
+  });
+  function getWorkerCommunication() {
+    if (!globalWorkerCommunication) {
+      globalWorkerCommunication = new WorkerCommunication();
+    }
+    return globalWorkerCommunication;
+  }
+  function resetWorkerCommunication() {
+    if (globalWorkerCommunication) {
+      globalWorkerCommunication.terminate();
+      globalWorkerCommunication = null;
+    }
+  }
+  async function initializeWorker(workerCode) {
+    const comm = getWorkerCommunication();
+    await comm.initialize(workerCode);
+  }
+  async function calculateSimilarities(jobVector, bulletVectors, selectedVectors = []) {
+    const comm = getWorkerCommunication();
+    return comm.calculateSimilarities(jobVector, bulletVectors, selectedVectors);
+  }
+  async function generateRecommendations(jobVector, projects, bullets, roleLimit, functionBias = "general") {
+    const comm = getWorkerCommunication();
+    return comm.generateRecommendations(
+      jobVector,
+      projects,
+      bullets,
+      roleLimit,
+      1,
+      // maxPerProject
+      functionBias
+    );
+  }
+  async function checkWorkerHealth() {
+    const comm = getWorkerCommunication();
+    return comm.healthCheck();
+  }
+  function getWorkerStatus() {
+    const comm = getWorkerCommunication();
+    return comm.getStatus();
+  }
+  var FUNCTION_BIAS_WEIGHTS, WorkerCommunication, globalWorkerCommunication;
+  var init_worker_communication = __esm({
+    "src/utils/worker-communication.ts"() {
+      "use strict";
+      init_worker_manager();
+      FUNCTION_BIAS_WEIGHTS = {
+        general: {
+          relevance: 0.8,
+          quality: 0.15,
+          recency: 0.05,
+          redundancyPenalty: 0.3
+        },
+        technical: {
+          relevance: 0.85,
+          // α +0.05
+          quality: 0.2,
+          // μ +0.05 (capped)
+          recency: 0.05,
+          redundancyPenalty: 0.3
+        },
+        business_strategy: {
+          relevance: 0.8,
+          quality: 0.2,
+          // μ +0.05
+          recency: 0.05,
+          redundancyPenalty: 0.35
+          // λ +0.05 (encourage diversity)
+        },
+        marketing: {
+          relevance: 0.78,
+          // α -0.02 (less keyword chasing)
+          quality: 0.2,
+          // μ +0.05
+          recency: 0.05,
+          redundancyPenalty: 0.3
+        },
+        operations: {
+          relevance: 0.8,
+          quality: 0.15,
+          recency: 0.1,
+          // ρ +0.05 (mild recency bump)
+          redundancyPenalty: 0.3
+        }
+      };
+      WorkerCommunication = class {
+        workerManager;
+        isInitialized = false;
+        constructor() {
+          this.workerManager = new WorkerManager({
+            enableHealthChecks: true,
+            enableCrashRecovery: true,
+            maxConcurrentOperations: 3
+          });
+        }
+        // ============================================================================
+        // Initialization
+        // ============================================================================
+        /**
+         * Initialize worker communication
+         */
+        async initialize(workerCode) {
+          try {
+            await this.workerManager.initialize(workerCode);
+            this.isInitialized = true;
+            console.log("Worker communication initialized successfully");
+          } catch (error) {
+            console.error("Worker communication initialization failed:", error);
+            throw new Error(`Failed to initialize worker: ${error instanceof Error ? error.message : "Unknown error"}`);
+          }
+        }
+        /**
+         * Check if worker is ready
+         */
+        isReady() {
+          return this.isInitialized && this.workerManager.getStatus().isHealthy;
+        }
+        // ============================================================================
+        // Vector Operations
+        // ============================================================================
+        /**
+         * Calculate cosine similarities between job vector and bullet vectors
+         */
+        async calculateSimilarities(jobVector, bulletVectors, selectedVectors = []) {
+          this.ensureInitialized();
+          try {
+            const request = {
+              jobVector,
+              bulletVectors,
+              selectedVectors
+            };
+            const response = await this.workerManager.sendMessage(
+              "vector_operation",
+              request,
+              2e3
+              // 2s timeout for vector operations
+            );
+            if (!response.success || !response.data) {
+              throw new Error(response.error || "Vector operation failed");
+            }
+            return response.data;
+          } catch (error) {
+            console.error("Vector similarity calculation failed:", error);
+            throw new Error(`Similarity calculation failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+          }
+        }
+        // ============================================================================
+        // Recommendation Generation
+        // ============================================================================
+        /**
+         * Generate recommendations for a job description
+         */
+        async generateRecommendations(jobVector, projects, bullets, roleLimit, maxPerProject = 1, functionBias = "general") {
+          this.ensureInitialized();
+          try {
+            const weights = this.getWeightsForBias(functionBias);
+            const request = {
+              jobVector,
+              projects,
+              bullets,
+              maxPerProject,
+              roleLimit,
+              weights
+            };
+            const response = await this.workerManager.sendMessage(
+              "recommendation",
+              request,
+              5e3
+              // 5s timeout for full recommendation
+            );
+            if (!response.success || !response.data) {
+              throw new Error(response.error || "Recommendation generation failed");
+            }
+            return response.data;
+          } catch (error) {
+            console.error("Recommendation generation failed:", error);
+            if (error instanceof Error && error.message.includes("timeout")) {
+              throw new Error("Recommendation generation timed out. Try reducing the number of bullets or simplifying the job description.");
+            }
+            throw new Error(`Recommendation failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+          }
+        }
+        /**
+         * Rank projects by relevance to job description
+         */
+        async rankProjects(jobVector, projects, functionBias = "general") {
+          const result = await this.generateRecommendations(
+            jobVector,
+            projects,
+            [],
+            // No bullets needed for project ranking only
+            999,
+            // High role limit
+            1,
+            functionBias
+          );
+          return result.projectScores;
+        }
+        // ============================================================================
+        // Utility Methods
+        // ============================================================================
+        /**
+         * Get algorithm weights for function bias
+         */
+        getWeightsForBias(bias) {
+          return { ...FUNCTION_BIAS_WEIGHTS[bias] };
+        }
+        /**
+         * Ensure worker is initialized
+         */
+        ensureInitialized() {
+          if (!this.isInitialized) {
+            throw new Error("Worker communication not initialized. Call initialize() first.");
+          }
+          if (!this.workerManager.getStatus().isHealthy) {
+            throw new Error("Worker is not healthy. Check worker status.");
+          }
+        }
+        /**
+         * Get worker status and performance metrics
+         */
+        getStatus() {
+          const status = this.workerManager.getStatus();
+          return {
+            isReady: this.isReady(),
+            ...status
+          };
+        }
+        /**
+         * Perform manual health check
+         */
+        async healthCheck() {
+          if (!this.isInitialized) {
+            return false;
+          }
+          try {
+            const response = await this.workerManager.sendMessage("health_check", {}, 2e3);
+            return response.success;
+          } catch (error) {
+            console.warn("Manual health check failed:", error);
+            return false;
+          }
+        }
+        /**
+         * Terminate worker and cleanup resources
+         */
+        terminate() {
+          if (this.workerManager) {
+            this.workerManager.terminate();
+            this.isInitialized = false;
+          }
+        }
+      };
+      globalWorkerCommunication = null;
+    }
+  });
+
+  // src/main.ts
+  console.log("Testing worker architecture...");
+  Promise.resolve().then(() => (init_worker_communication(), worker_communication_exports)).then(async (workerComm) => {
+    console.log("Worker communication imported successfully");
+    try {
+      const workerUrl = window.WORKER_URL;
+      console.log("Worker URL available:", !!workerUrl);
+      if (workerUrl) {
+        await workerComm.initializeWorker();
+        console.log("Worker initialized successfully");
+        const isHealthy = await workerComm.checkWorkerHealth();
+        console.log("Worker health:", isHealthy);
+        const jobVector = new Float32Array([0.1, 0.2, 0.3]);
+        const bulletVectors = [
+          new Float32Array([0.2, 0.1, 0.4]),
+          new Float32Array([0.1, 0.3, 0.2])
+        ];
+        const vectorResult = await workerComm.calculateSimilarities(
+          jobVector,
+          bulletVectors
+        );
+        console.log("Vector operation result:", vectorResult);
+        const appContainer = document.getElementById("app");
+        if (appContainer) {
+          appContainer.innerHTML = `
+          <div style="color: green; font-weight: bold; font-size: 18px;">
+            \u2705 Worker Architecture Working!
+          </div>
+          <div style="margin-top: 1rem;">
+            <strong>Worker Status:</strong>
+            <ul>
+              <li>Worker URL: Available \u2705</li>
+              <li>Communication: Working \u2705</li>
+              <li>Health: ${isHealthy ? "Healthy" : "Issues"} \u2705</li>
+              <li>Vector Operations: Working \u2705</li>
+              <li>Similarities: ${vectorResult.similarities.length} calculated \u2705</li>
+            </ul>
+          </div>
+          <div style="margin-top: 1rem; color: blue;">
+            <strong>Step 4 Complete:</strong> Worker architecture functional with crash handling
+          </div>
+        `;
+        }
+      } else {
+        throw new Error("Worker URL not available - build system may not have created it");
+      }
+    } catch (error) {
+      console.error("Worker test failed:", error);
+      const appContainer = document.getElementById("app");
+      if (appContainer) {
+        appContainer.innerHTML = `<div style="color: red;">Worker test failed: ${error instanceof Error ? error.message : "Unknown error"}</div>`;
+      }
+    }
+  }).catch((error) => {
+    console.error("Worker communication import failed:", error);
+    const appContainer = document.getElementById("app");
+    if (appContainer) {
+      appContainer.innerHTML = `<div style="color: red;">Worker import failed: ${error instanceof Error ? error.message : "Unknown error"}</div>`;
+    }
+  });
+})();
+
         
-        console.log('Resuum starting...');
+        // Initialize the application
+        console.log('Resuum starting with TypeScript integration...');
         
         // Remove loading message
         const loadingDiv = document.getElementById('loading');
@@ -111,8 +901,21 @@
             loadingDiv.remove();
         }
         
-        // Simple tab-based UI without complex imports
-        function createResuumUI() {
+        // Start the TypeScript application
+        try {
+            if (typeof ResuumApp !== 'undefined' && ResuumApp.initialize) {
+                ResuumApp.initialize('app');
+                console.log('TypeScript Resuum initialized successfully');
+            } else {
+                // Fallback to simple UI if TypeScript compilation failed
+                createFallbackUI();
+            }
+        } catch (error) {
+            console.error('TypeScript initialization failed, using fallback:', error);
+            createFallbackUI();
+        }
+        
+        function createFallbackUI() {
             const appContainer = document.getElementById('app');
             if (!appContainer) return;
             
@@ -162,7 +965,6 @@
             
             // Add tab switching functionality
             const tabButtons = document.querySelectorAll('.tab-button');
-            const tabContent = document.getElementById('tab-content');
             
             tabButtons.forEach(button => {
                 button.addEventListener('click', () => {
@@ -207,18 +1009,7 @@
                     `;
                     break;
                 case 'experience':
-                    tabContent.innerHTML = `
-                        <div id="experience-tab">
-                            <h2>Manage Experience</h2>
-                            <p>Add and organize your work experience and bullet points.</p>
-                            <div class="success">
-                                <strong>Good news!</strong> This tab will let you manage your resume bullet points and work history.
-                            </div>
-                            <button style="background: #10b981; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 4px; cursor: pointer; font-size: 1rem;">
-                                Add New Role
-                            </button>
-                        </div>
-                    `;
+                    showExperienceTab();
                     break;
                 case 'settings':
                     tabContent.innerHTML = `
@@ -246,6 +1037,105 @@
             }
         }
         
+        function showExperienceTab() {
+            const tabContent = document.getElementById('tab-content');
+            if (!tabContent) return;
+            
+            tabContent.innerHTML = `
+                <div id="experience-tab">
+                    <div class="experience-header">
+                        <h2 class="section-title">Experience Management</h2>
+                        <div class="embedding-summary">
+                            <p class="summary-text">2 bullet points: 1 ready, 1 pending, 0 stale, 0 failed</p>
+                        </div>
+                    </div>
+                    
+                    <nav class="experience-sub-nav">
+                        <ul class="sub-nav-list">
+                            <li><button class="sub-nav-button sub-nav-button--active" onclick="showBullets()">Bullet Points</button></li>
+                            <li><button class="sub-nav-button" onclick="showProjects()">Projects</button></li>
+                        </ul>
+                    </nav>
+                    
+                    <div id="experience-content">
+                        <div class="table-controls">
+                            <label>Sort by:</label>
+                            <select class="sort-select">
+                                <option value="role">Role (Chronological)</option>
+                                <option value="project">Project Name</option>
+                                <option value="created">Created Date</option>
+                            </select>
+                        </div>
+                        
+                        <table class="bullets-table">
+                            <thead>
+                                <tr>
+                                    <th>Role</th>
+                                    <th>Project</th>
+                                    <th>Bullet Text</th>
+                                    <th>State</th>
+                                    <th>Quality</th>
+                                    <th>Created</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>Senior Consultant - McKinsey & Company</td>
+                                    <td>Global Telecom Transformation</td>
+                                    <td>Led cross-functional team of 12 engineers to develop 5G infrastructure...</td>
+                                    <td><span class="state-badge state-badge--ready">✅ Ready</span></td>
+                                    <td><div class="quality-indicators"><span class="quality-indicator active" title="Has quantified results">📊</span><span class="quality-indicator active" title="Strong action verb">⚡</span><span class="quality-indicator active" title="Appropriate length">📏</span></div></td>
+                                    <td>1/1/2023</td>
+                                </tr>
+                                <tr>
+                                    <td>Senior Consultant - McKinsey & Company</td>
+                                    <td>Global Telecom Transformation</td>
+                                    <td>Designed go-to-market strategy for new network services...</td>
+                                    <td><span class="state-badge state-badge--pending">⏳ Pending</span></td>
+                                    <td><div class="quality-indicators"><span class="quality-indicator active" title="Has quantified results">📊</span><span class="quality-indicator active" title="Strong action verb">⚡</span><span class="quality-indicator active" title="Appropriate length">📏</span></div></td>
+                                    <td>1/1/2023</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+        
+        function showBullets() {
+            const buttons = document.querySelectorAll('.sub-nav-button');
+            buttons.forEach(btn => btn.classList.remove('sub-nav-button--active'));
+            buttons[0].classList.add('sub-nav-button--active');
+            showExperienceTab();
+        }
+        
+        function showProjects() {
+            const buttons = document.querySelectorAll('.sub-nav-button');
+            buttons.forEach(btn => btn.classList.remove('sub-nav-button--active'));
+            buttons[1].classList.add('sub-nav-button--active');
+            
+            document.getElementById('experience-content').innerHTML = `
+                <table class="bullets-table">
+                    <thead>
+                        <tr>
+                            <th>Role</th>
+                            <th>Project Name</th>
+                            <th># Bullets</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Senior Consultant - McKinsey & Company</td>
+                            <td>Global Telecom Transformation</td>
+                            <td>2</td>
+                            <td>Core network modernization and go-to-market strategy</td>
+                        </tr>
+                    </tbody>
+                </table>
+            `;
+        }
+        
         function analyzeJob() {
             const textarea = document.getElementById('job-description');
             const recommendationsDiv = document.getElementById('recommendations');
@@ -267,35 +1157,14 @@
                 <div class="success">
                     <strong>Analysis Complete!</strong> Here are your recommended resume bullets:
                     <ul style="margin: 1rem 0; padding-left: 2rem;">
-                        <li>Led cross-functional team of 5 engineers to deliver project 2 weeks ahead of schedule</li>
-                        <li>Implemented automated testing pipeline resulting in 40% reduction in bug reports</li>
-                        <li>Collaborated with product managers to define technical requirements for new features</li>
-                        <li>Mentored 3 junior developers on best practices and code review processes</li>
-                        <li>Optimized database queries improving application response time by 25%</li>
+                        <li>Led cross-functional team of 12 engineers to develop 5G infrastructure demand forecast model, achieving 15% improvement in accuracy</li>
+                        <li>Designed go-to-market strategy for new network services, conducting market analysis across 8 regions</li>
                     </ul>
                     <button style="background: #10b981; color: white; border: none; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer;">
                         Copy to Clipboard
                     </button>
                 </div>
             `;
-        }
-        
-        // Initialize the UI
-        try {
-            createResuumUI();
-            console.log('Resuum initialized successfully');
-        } catch (error) {
-            console.error('Failed to initialize Resuum:', error);
-            const appContainer = document.getElementById('app');
-            if (appContainer) {
-                appContainer.innerHTML = `
-                    <div class="error">
-                        <h3>Initialization Error</h3>
-                        <p>Failed to load Resuum: ${error.message}</p>
-                        <button onclick="window.location.reload()">Retry</button>
-                    </div>
-                `;
-            }
         }
     </script>
 </body>
