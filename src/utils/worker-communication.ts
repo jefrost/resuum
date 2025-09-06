@@ -1,413 +1,216 @@
 /**
- * Worker Communication - High-level API for worker interactions
+ * Worker communication protocol and message routing
  */
 
-import { WorkerManager } from './worker-manager';
 import type { 
-  VectorOperation, 
-  VectorResult,
-  AlgorithmWeights,
-  FunctionBias 
-} from '../types';
-
-// ============================================================================
-// Communication Protocol Types
-// ============================================================================
-
-interface ProjectRankingRequest {
-  jobVector: Float32Array;
-  projects: Array<{
+    VectorOperationData, 
+    AlgorithmWeights,
+    FunctionBias 
+  } from '../types';
+  
+  // ============================================================================
+  // Worker Message Types
+  // ============================================================================
+  
+  export interface WorkerMessage {
+    type: 'vector_operation' | 'recommendation' | 'health_check' | 'performance_reset';
     id: string;
-    centroidVector: Float32Array;
-    recencyFactor: number;
-  }>;
-  weights: AlgorithmWeights;
-}
-
-interface BulletSelectionRequest {
-  jobVector: Float32Array;
-  bullets: Array<{
+    data: any;
+  }
+  
+  export interface WorkerResponse {
+    type: string;
     id: string;
-    projectId: string;
-    vector: Float32Array;
-    qualityFeatures: {
-      hasNumbers: boolean;
-      actionVerb: boolean;
-      lengthOk: boolean;
-    };
-  }>;
-  projectShortlist: string[];
-  maxPerProject: number;
-  roleLimit: number;
-  weights: AlgorithmWeights;
-}
-
-interface RecommendationRequest extends ProjectRankingRequest {
-  bullets: BulletSelectionRequest['bullets'];
-  maxPerProject: number;
-  roleLimit: number;
-}
-
-interface RecommendationResult {
-  projectScores: Array<{
-    projectId: string;
-    score: number;
-    similarity: number;
-    recencyFactor: number;
-  }>;
-  selectedBullets: Array<{
-    bulletId: string;
-    score: number;
-    relevance: number;
-    qualityScore: number;
-    redundancyScore: number;
-  }>;
-  processingTime: number;
-}
-
-// ============================================================================
-// Function Bias Weight Maps
-// ============================================================================
-
-const FUNCTION_BIAS_WEIGHTS: Record<FunctionBias, AlgorithmWeights> = {
-  general: {
-    relevance: 0.80,
-    quality: 0.15,
-    recency: 0.05,
-    redundancyPenalty: 0.30
-  },
-  technical: {
-    relevance: 0.85, // α +0.05
-    quality: 0.20,   // μ +0.05 (capped)
-    recency: 0.05,
-    redundancyPenalty: 0.30
-  },
-  business_strategy: {
-    relevance: 0.80,
-    quality: 0.20,   // μ +0.05
-    recency: 0.05,
-    redundancyPenalty: 0.35 // λ +0.05 (encourage diversity)
-  },
-  marketing: {
-    relevance: 0.78, // α -0.02 (less keyword chasing)
-    quality: 0.20,   // μ +0.05
-    recency: 0.05,
-    redundancyPenalty: 0.30
-  },
-  operations: {
-    relevance: 0.80,
-    quality: 0.15,
-    recency: 0.10,   // ρ +0.05 (mild recency bump)
-    redundancyPenalty: 0.30
-  }
-};
-
-// ============================================================================
-// Worker Communication Class
-// ============================================================================
-
-export class WorkerCommunication {
-  private workerManager: WorkerManager;
-  private isInitialized = false;
-  
-  constructor() {
-    this.workerManager = new WorkerManager({
-      enableHealthChecks: true,
-      enableCrashRecovery: true,
-      maxConcurrentOperations: 3
-    });
+    success: boolean;
+    data?: any;
+    error?: string;
+    processingTime: number;
   }
   
   // ============================================================================
-  // Initialization
+  // Algorithm Configuration
   // ============================================================================
   
-  /**
-   * Initialize worker communication
-   */
-  async initialize(workerCode?: string): Promise<void> {
-    try {
-      await this.workerManager.initialize(workerCode);
-      this.isInitialized = true;
-      console.log('Worker communication initialized successfully');
-    } catch (error) {
-      console.error('Worker communication initialization failed:', error);
-      throw new Error(`Failed to initialize worker: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  export const ALGORITHM_WEIGHTS: Record<FunctionBias, AlgorithmWeights> = {
+    general: {
+      relevance: 0.80,
+      quality: 0.15,
+      recency: 0.05,
+      redundancy: 0.30
+    },
+    technical: {
+      relevance: 0.85,
+      quality: 0.20,
+      recency: 0.05,
+      redundancy: 0.30
+    },
+    business_strategy: {
+      relevance: 0.80,
+      quality: 0.20,
+      recency: 0.05,
+      redundancy: 0.35
+    },
+    marketing: {
+      relevance: 0.78,
+      quality: 0.20,
+      recency: 0.05,
+      redundancy: 0.30
+    },
+    operations: {
+      relevance: 0.80,
+      quality: 0.15,
+      recency: 0.10,
+      redundancy: 0.30
     }
-  }
-  
-  /**
-   * Check if worker is ready
-   */
-  isReady(): boolean {
-    return this.isInitialized && this.workerManager.getStatus().isHealthy;
-  }
+  };
   
   // ============================================================================
-  // Vector Operations
+  // Quality Feature Scoring
   // ============================================================================
   
-  /**
-   * Calculate cosine similarities between job vector and bullet vectors
-   */
-  async calculateSimilarities(
-    jobVector: Float32Array,
-    bulletVectors: Float32Array[],
-    selectedVectors: Float32Array[] = []
-  ): Promise<VectorResult> {
-    this.ensureInitialized();
-    
-    try {
-      const request: VectorOperation = {
-        jobVector,
-        bulletVectors,
-        selectedVectors
-      };
-      
-      const response = await this.workerManager.sendMessage(
-        'vector_operation',
-        request,
-        2000 // 2s timeout for vector operations
-      );
-      
-      if (!response.success || !response.data) {
-        throw new Error(response.error || 'Vector operation failed');
-      }
-      
-      return response.data as VectorResult;
-      
-    } catch (error) {
-      console.error('Vector similarity calculation failed:', error);
-      throw new Error(`Similarity calculation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
+  export interface QualityFeatureWeights {
+    hasNumbers: number;
+    actionVerb: number;
+    lengthOk: number;
+    maxBonus: number;
   }
   
+  export const QUALITY_WEIGHTS: QualityFeatureWeights = {
+    hasNumbers: 0.20,
+    actionVerb: 0.10,
+    lengthOk: 0.05,
+    maxBonus: 0.35
+  };
+  
   // ============================================================================
-  // Recommendation Generation
+  // Message Validation
   // ============================================================================
   
-  /**
-   * Generate recommendations for a job description
-   */
-  async generateRecommendations(
-    jobVector: Float32Array,
-    projects: ProjectRankingRequest['projects'],
-    bullets: BulletSelectionRequest['bullets'],
-    roleLimit: number,
-    maxPerProject: number = 1,
-    functionBias: FunctionBias = 'general'
-  ): Promise<RecommendationResult> {
-    this.ensureInitialized();
-    
-    try {
-      const weights = this.getWeightsForBias(functionBias);
-      
-      const request: RecommendationRequest = {
-        jobVector,
-        projects,
-        bullets,
-        maxPerProject,
-        roleLimit,
-        weights
-      };
-      
-      const response = await this.workerManager.sendMessage(
-        'recommendation',
-        request,
-        5000 // 5s timeout for full recommendation
-      );
-      
-      if (!response.success || !response.data) {
-        throw new Error(response.error || 'Recommendation generation failed');
-      }
-      
-      return response.data as RecommendationResult;
-      
-    } catch (error) {
-      console.error('Recommendation generation failed:', error);
-      
-      // Check if it's a timeout error and provide helpful message
-      if (error instanceof Error && error.message.includes('timeout')) {
-        throw new Error('Recommendation generation timed out. Try reducing the number of bullets or simplifying the job description.');
-      }
-      
-      throw new Error(`Recommendation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-  
-  /**
-   * Rank projects by relevance to job description
-   */
-  async rankProjects(
-    jobVector: Float32Array,
-    projects: ProjectRankingRequest['projects'],
-    functionBias: FunctionBias = 'general'
-  ): Promise<RecommendationResult['projectScores']> {
-    const result = await this.generateRecommendations(
-      jobVector,
-      projects,
-      [], // No bullets needed for project ranking only
-      999, // High role limit
-      1,
-      functionBias
+  export function validateWorkerMessage(message: any): message is WorkerMessage {
+    return (
+      message &&
+      typeof message === 'object' &&
+      typeof message.type === 'string' &&
+      typeof message.id === 'string' &&
+      message.data !== undefined
     );
-    
-    return result.projectScores;
+  }
+  
+  export function validateVectorOperation(data: any): data is VectorOperationData {
+    return (
+      data &&
+      typeof data === 'object' &&
+      typeof data.operation === 'string' &&
+      Array.isArray(data.vectors)
+    );
   }
   
   // ============================================================================
-  // Utility Methods
+  // Response Helpers
   // ============================================================================
   
-  /**
-   * Get algorithm weights for function bias
-   */
-  private getWeightsForBias(bias: FunctionBias): AlgorithmWeights {
-    return { ...FUNCTION_BIAS_WEIGHTS[bias] };
+  export function createSuccessResponse(
+    type: string,
+    id: string,
+    data: any,
+    processingTime: number
+  ): WorkerResponse {
+    return {
+      type,
+      id,
+      success: true,
+      data,
+      processingTime
+    };
   }
   
-  /**
-   * Ensure worker is initialized
-   */
-  private ensureInitialized(): void {
-    if (!this.isInitialized) {
-      throw new Error('Worker communication not initialized. Call initialize() first.');
-    }
-    
-    if (!this.workerManager.getStatus().isHealthy) {
-      throw new Error('Worker is not healthy. Check worker status.');
-    }
+  export function createErrorResponse(
+    type: string,
+    id: string,
+    error: string,
+    processingTime: number = 0
+  ): WorkerResponse {
+    return {
+      type,
+      id,
+      success: false,
+      error,
+      processingTime
+    };
   }
   
-  /**
-   * Get worker status and performance metrics
-   */
-  getStatus(): {
-    isReady: boolean;
-    isHealthy: boolean;
-    pendingOperations: number;
-    restartAttempts: number;
-    lastHealthCheck: number;
-  } {
-    const status = this.workerManager.getStatus();
+  // ============================================================================
+  // Vector Operation Results
+  // ============================================================================
+  
+  export interface SimilarityResult {
+    similarities: number[];
+    processingTime: number;
+  }
+  
+  export interface RedundancyResult {
+    redundancyScores: number[];
+    processingTime: number;
+  }
+  
+  export interface MMRResult {
+    selectedIndices: number[];
+    scores: number[];
+    processingTime: number;
+  }
+  
+  // ============================================================================
+  // Function Bias Application
+  // ============================================================================
+  
+  export function applyFunctionBias(bias: FunctionBias): AlgorithmWeights {
+    const biasWeights = ALGORITHM_WEIGHTS[bias];
     
     return {
-      isReady: this.isReady(),
-      ...status
+      relevance: biasWeights.relevance,
+      quality: biasWeights.quality,
+      recency: biasWeights.recency,
+      redundancy: biasWeights.redundancy
     };
   }
   
-  /**
-   * Perform manual health check
-   */
-  async healthCheck(): Promise<boolean> {
-    if (!this.isInitialized) {
-      return false;
+  // ============================================================================
+  // Quality Score Calculation
+  // ============================================================================
+  
+  export function calculateQualityScore(features: {
+    hasNumbers: boolean;
+    actionVerb: boolean;
+    lengthOk: boolean;
+  }): number {
+    let score = 0;
+    
+    if (features.hasNumbers) {
+      score += QUALITY_WEIGHTS.hasNumbers;
     }
     
-    try {
-      const response = await this.workerManager.sendMessage('health_check', {}, 2000);
-      return response.success;
-    } catch (error) {
-      console.warn('Manual health check failed:', error);
-      return false;
+    if (features.actionVerb) {
+      score += QUALITY_WEIGHTS.actionVerb;
     }
+    
+    if (features.lengthOk) {
+      score += QUALITY_WEIGHTS.lengthOk;
+    }
+    
+    // Cap at maximum bonus
+    return Math.min(score, QUALITY_WEIGHTS.maxBonus);
   }
   
-  /**
-   * Terminate worker and cleanup resources
-   */
-  terminate(): void {
-    if (this.workerManager) {
-      this.workerManager.terminate();
-      this.isInitialized = false;
+  // ============================================================================
+  // Recency Scoring
+  // ============================================================================
+  
+  export function calculateRecencyScore(roleOrderIndex: number, maxOrderIndex: number): number {
+    if (maxOrderIndex === 0) {
+      return 1.0; // Single role
     }
+    
+    // Linear decay: most recent (index 0) = 1.0, oldest = 0.5
+    const normalizedIndex = roleOrderIndex / maxOrderIndex;
+    return 1.0 - (normalizedIndex * 0.5);
   }
-}
-
-// ============================================================================
-// Singleton Instance
-// ============================================================================
-
-let globalWorkerCommunication: WorkerCommunication | null = null;
-
-/**
- * Get global worker communication instance
- */
-export function getWorkerCommunication(): WorkerCommunication {
-  if (!globalWorkerCommunication) {
-    globalWorkerCommunication = new WorkerCommunication();
-  }
-  return globalWorkerCommunication;
-}
-
-/**
- * Reset worker communication (for testing)
- */
-export function resetWorkerCommunication(): void {
-  if (globalWorkerCommunication) {
-    globalWorkerCommunication.terminate();
-    globalWorkerCommunication = null;
-  }
-}
-
-// ============================================================================
-// Convenience Functions
-// ============================================================================
-
-/**
- * Initialize worker with inline code or separate file
- */
-export async function initializeWorker(workerCode?: string): Promise<void> {
-  const comm = getWorkerCommunication();
-  await comm.initialize(workerCode);
-}
-
-/**
- * Quick similarity calculation
- */
-export async function calculateSimilarities(
-  jobVector: Float32Array,
-  bulletVectors: Float32Array[],
-  selectedVectors: Float32Array[] = []
-): Promise<VectorResult> {
-  const comm = getWorkerCommunication();
-  return comm.calculateSimilarities(jobVector, bulletVectors, selectedVectors);
-}
-
-/**
- * Quick recommendation generation
- */
-export async function generateRecommendations(
-  jobVector: Float32Array,
-  projects: ProjectRankingRequest['projects'],
-  bullets: BulletSelectionRequest['bullets'],
-  roleLimit: number,
-  functionBias: FunctionBias = 'general'
-): Promise<RecommendationResult> {
-  const comm = getWorkerCommunication();
-  return comm.generateRecommendations(
-    jobVector,
-    projects,
-    bullets,
-    roleLimit,
-    1, // maxPerProject
-    functionBias
-  );
-}
-
-/**
- * Check worker health
- */
-export async function checkWorkerHealth(): Promise<boolean> {
-  const comm = getWorkerCommunication();
-  return comm.healthCheck();
-}
-
-/**
- * Get worker status
- */
-export function getWorkerStatus() {
-  const comm = getWorkerCommunication();
-  return comm.getStatus();
-}

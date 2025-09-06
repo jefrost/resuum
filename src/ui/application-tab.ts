@@ -4,8 +4,7 @@
  */
 
 import { createSafeElement, setSafeTextContent } from './xss-safe-rendering';
-import { getSampleDataset, getRoleById, getProjectById } from '../data/sample-data';
-import type { Bullet, Role, Project } from '../types/index';
+import { getSampleDataset } from '../data/sample-data';
 
 // ============================================================================
 // Application Tab Class

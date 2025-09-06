@@ -357,6 +357,29 @@ var Resuum = (() => {
     }
     return element;
   }
+  function renderBulletPoint(bulletText, embeddingState) {
+    const container = createSafeElement("div", "", "bullet-point-container");
+    const textElement = createSafeElement("span", bulletText, "bullet-text");
+    const stateElement = createSafeElement("span", "", `embedding-state embedding-state--${embeddingState}`);
+    setSafeTextContent(stateElement, getEmbeddingStateLabel(embeddingState));
+    container.appendChild(textElement);
+    container.appendChild(stateElement);
+    return container;
+  }
+  function getEmbeddingStateLabel(state) {
+    switch (state) {
+      case "ready":
+        return "\u2713";
+      case "pending":
+        return "\u23F3";
+      case "stale":
+        return "\u26A0";
+      case "failed":
+        return "\u2717";
+      default:
+        return "?";
+    }
+  }
   function createErrorElement(message, title) {
     const container = createSafeElement("div", "", "error-message");
     if (title) {
@@ -376,379 +399,2226 @@ var Resuum = (() => {
     }
   });
 
-  // src/ui/bullets-table.ts
-  var BulletsTable;
-  var init_bullets_table = __esm({
-    "src/ui/bullets-table.ts"() {
+  // src/utils/feature-detection.ts
+  function detectIndexedDB() {
+    try {
+      if (!("indexedDB" in window)) {
+        return false;
+      }
+      if (!window.indexedDB) {
+        return false;
+      }
+      if (typeof window.indexedDB.open !== "function") {
+        return false;
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+  function detectWebWorkers() {
+    try {
+      return "Worker" in window && typeof Worker === "function";
+    } catch (error) {
+      return false;
+    }
+  }
+  function detectBlobWorkers() {
+    try {
+      if (!detectWebWorkers()) {
+        return false;
+      }
+      if (!("Blob" in window) || !("URL" in window) || typeof URL.createObjectURL !== "function") {
+        return false;
+      }
+      const testBlob = new Blob([""], { type: "application/javascript" });
+      const url = URL.createObjectURL(testBlob);
+      URL.revokeObjectURL(url);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+  function detectClipboardAPI() {
+    try {
+      return "navigator" in window && "clipboard" in navigator && typeof navigator.clipboard.writeText === "function";
+    } catch (error) {
+      return false;
+    }
+  }
+  function detectFetch() {
+    try {
+      return "fetch" in window && typeof fetch === "function";
+    } catch (error) {
+      return false;
+    }
+  }
+  function detectArrayBuffer() {
+    try {
+      return "ArrayBuffer" in window && "Float32Array" in window && typeof ArrayBuffer === "function" && typeof Float32Array === "function";
+    } catch (error) {
+      return false;
+    }
+  }
+  function detectTextEncoder() {
+    try {
+      return "TextEncoder" in window && "TextDecoder" in window && typeof TextEncoder === "function";
+    } catch (error) {
+      return false;
+    }
+  }
+  function detectCrypto() {
+    try {
+      return "crypto" in window && window.crypto && "getRandomValues" in window.crypto && typeof window.crypto.getRandomValues === "function";
+    } catch (error) {
+      return false;
+    }
+  }
+  function detectBrowserCapabilities() {
+    return {
+      indexedDB: detectIndexedDB(),
+      webWorkers: detectWebWorkers(),
+      blobWorkers: detectBlobWorkers(),
+      clipboardAPI: detectClipboardAPI(),
+      fetch: detectFetch(),
+      arrayBuffer: detectArrayBuffer(),
+      textEncoder: detectTextEncoder(),
+      crypto: detectCrypto()
+    };
+  }
+  var init_feature_detection = __esm({
+    "src/utils/feature-detection.ts"() {
       "use strict";
-      init_xss_safe_rendering();
-      BulletsTable = class {
-        container;
-        state = {
-          sortBy: "role",
-          sortDirection: "asc"
-        };
-        constructor(container) {
-          this.container = container;
+    }
+  });
+
+  // src/storage/schema.ts
+  function validateStoreConfig(store) {
+    if (!store.name || !store.keyPath) {
+      return false;
+    }
+    if (store.indexes) {
+      for (const index of store.indexes) {
+        if (!index.name || !index.keyPath) {
+          return false;
         }
-        // ============================================================================
-        // Public Interface
-        // ============================================================================
-        /**
-         * Render the complete bullets table
-         */
-        render(bullets, roles, projects) {
-          this.container.innerHTML = "";
-          const tableContainer = createSafeElement("div", "", "table-container");
-          const controls = this.createTableControls();
-          tableContainer.appendChild(controls);
-          const table = createSafeElement("table", "", "bullets-table");
-          const thead = this.createTableHeader();
-          const tbody = this.createTableBody(bullets, roles, projects);
-          table.appendChild(thead);
-          table.appendChild(tbody);
-          tableContainer.appendChild(table);
-          this.container.appendChild(tableContainer);
-        }
-        /**
-         * Update sort criteria and re-render if needed
-         */
-        updateSort(sortBy, direction) {
-          this.state.sortBy = sortBy;
-          if (direction) {
-            this.state.sortDirection = direction;
+      }
+    }
+    return true;
+  }
+  var DB_NAME, DB_VERSION, DATABASE_SCHEMA, EMBEDDING_STATES, EMBEDDING_RETRY_LIMITS, QUEUE_PRIORITIES;
+  var init_schema = __esm({
+    "src/storage/schema.ts"() {
+      "use strict";
+      DB_NAME = "ResuumDB";
+      DB_VERSION = 1;
+      DATABASE_SCHEMA = {
+        name: DB_NAME,
+        version: DB_VERSION,
+        stores: [
+          {
+            name: "roles",
+            keyPath: "id",
+            indexes: [
+              { name: "orderIndex", keyPath: "orderIndex" },
+              { name: "company", keyPath: "company" }
+            ]
+          },
+          {
+            name: "projects",
+            keyPath: "id",
+            indexes: [
+              { name: "roleId", keyPath: "roleId" },
+              { name: "name", keyPath: "name" },
+              { name: "bulletCount", keyPath: "bulletCount" },
+              { name: "embeddingVersion", keyPath: "embeddingVersion" },
+              { name: "role_bulletCount", keyPath: ["roleId", "bulletCount"] }
+            ]
+          },
+          {
+            name: "bullets",
+            keyPath: "id",
+            indexes: [
+              { name: "roleId", keyPath: "roleId" },
+              { name: "projectId", keyPath: "projectId" },
+              { name: "normalizedFingerprint", keyPath: "normalizedFingerprint" },
+              { name: "embeddingState", keyPath: "embeddingState" },
+              { name: "createdAt", keyPath: "createdAt" },
+              { name: "lastModified", keyPath: "lastModified" },
+              { name: "role_project", keyPath: ["roleId", "projectId"] },
+              { name: "role_state", keyPath: ["roleId", "embeddingState"] },
+              { name: "project_state", keyPath: ["projectId", "embeddingState"] },
+              { name: "fingerprint_role", keyPath: ["normalizedFingerprint", "roleId"] }
+            ]
+          },
+          {
+            name: "embeddings",
+            keyPath: "bulletId",
+            indexes: [
+              { name: "vendor", keyPath: "vendor" },
+              { name: "model", keyPath: "model" },
+              { name: "version", keyPath: "version" },
+              { name: "createdAt", keyPath: "createdAt" },
+              { name: "vendor_model_version", keyPath: ["vendor", "model", "version"] }
+            ]
+          },
+          {
+            name: "embedQueue",
+            keyPath: "id",
+            indexes: [
+              { name: "bulletId", keyPath: "bulletId", options: { unique: true } },
+              { name: "priority", keyPath: "priority" },
+              { name: "createdAt", keyPath: "createdAt" },
+              { name: "retryCount", keyPath: "retryCount" },
+              { name: "priority_created", keyPath: ["priority", "createdAt"] }
+            ]
+          },
+          {
+            name: "settings",
+            keyPath: "key",
+            indexes: []
+          }
+        ]
+      };
+      EMBEDDING_STATES = {
+        READY: "ready",
+        PENDING: "pending",
+        STALE: "stale",
+        FAILED: "failed"
+      };
+      EMBEDDING_RETRY_LIMITS = {
+        MAX_RETRIES: 3,
+        BACKOFF_BASE: 1e3,
+        // 1 second
+        BACKOFF_MULTIPLIER: 2
+      };
+      QUEUE_PRIORITIES = {
+        HIGH: 1,
+        // New bullets, user-initiated
+        NORMAL: 5,
+        // Batch operations
+        LOW: 10
+        // Background processing
+      };
+    }
+  });
+
+  // src/utils/uuid.ts
+  function generateUUID() {
+    if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+      const bytes = new Uint8Array(16);
+      crypto.getRandomValues(bytes);
+      if (bytes.length < 16) {
+        throw new Error("Failed to generate sufficient random bytes");
+      }
+      bytes[6] = (bytes[6] ?? 0) & 15 | 64;
+      bytes[8] = (bytes[8] ?? 0) & 63 | 128;
+      const hex = Array.from(bytes).map((b) => (b ?? 0).toString(16).padStart(2, "0")).join("");
+      return [
+        hex.slice(0, 8),
+        hex.slice(8, 12),
+        hex.slice(12, 16),
+        hex.slice(16, 20),
+        hex.slice(20, 32)
+      ].join("-");
+    } else {
+      return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+        const r = Math.random() * 16 | 0;
+        const v = c === "x" ? r : r & 3 | 8;
+        return v.toString(16);
+      });
+    }
+  }
+  function generateULID() {
+    const timestamp = Date.now();
+    const timestampPart = timestamp.toString(36).padStart(10, "0");
+    const randomPart = generateRandomString(16);
+    return `${timestampPart}_${randomPart}`;
+  }
+  function generateRandomString(length) {
+    const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
+    let result = "";
+    if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+      const bytes = new Uint8Array(length);
+      crypto.getRandomValues(bytes);
+      for (let i = 0; i < Math.min(bytes.length, length); i++) {
+        const byteValue = bytes[i] ?? 0;
+        result += chars[byteValue % chars.length] ?? "0";
+      }
+    } else {
+      for (let i = 0; i < length; i++) {
+        result += chars[Math.floor(Math.random() * chars.length)] ?? "0";
+      }
+    }
+    return result;
+  }
+  function createId(type = "bullet") {
+    if (type === "bullet" || type === "embed_queue") {
+      return generateULID();
+    }
+    return generateUUID();
+  }
+  var init_uuid = __esm({
+    "src/utils/uuid.ts"() {
+      "use strict";
+    }
+  });
+
+  // src/storage/database.ts
+  async function getDatabase() {
+    if (!globalConnection) {
+      globalConnection = new DatabaseConnection();
+    }
+    return globalConnection.open();
+  }
+  var DatabaseConnection, globalConnection;
+  var init_database = __esm({
+    "src/storage/database.ts"() {
+      "use strict";
+      init_feature_detection();
+      init_schema();
+      init_uuid();
+      DatabaseConnection = class {
+        db = null;
+        openPromise = null;
+        constructor() {
+          const capabilities = detectBrowserCapabilities();
+          if (!capabilities.indexedDB) {
+            throw new Error("IndexedDB is not supported in this browser. Please use Chrome 91+, Firefox 90+, Safari 14+, or Edge 91+.");
           }
         }
         /**
-         * Get current sort state
+         * Open database connection with schema migration
          */
-        getSortState() {
-          return { ...this.state };
+        async open() {
+          if (this.db && !this.db.version) {
+            this.db = null;
+            this.openPromise = null;
+          }
+          if (this.db) {
+            return this.db;
+          }
+          if (this.openPromise) {
+            return this.openPromise;
+          }
+          this.openPromise = this.performOpen();
+          return this.openPromise;
         }
-        // ============================================================================
-        // Table Controls
-        // ============================================================================
+        async performOpen() {
+          return new Promise((resolve, reject) => {
+            const request = indexedDB.open(DB_NAME, DB_VERSION);
+            request.onerror = () => {
+              const error = request.error;
+              console.error("Failed to open database:", error);
+              reject(new Error(`Database connection failed: ${error?.message || "Unknown error"}`));
+            };
+            request.onsuccess = () => {
+              this.db = request.result;
+              this.db.onclose = () => {
+                console.warn("Database connection closed unexpectedly");
+                this.db = null;
+                this.openPromise = null;
+              };
+              this.db.onversionchange = () => {
+                console.warn("Database version changed by another tab");
+                this.db?.close();
+                this.db = null;
+                this.openPromise = null;
+              };
+              resolve(this.db);
+            };
+            request.onupgradeneeded = (event) => {
+              const db = request.result;
+              const transaction = request.transaction;
+              if (!transaction) {
+                reject(new Error("No transaction available during upgrade"));
+                return;
+              }
+              try {
+                this.performMigration(db, event.oldVersion, event.newVersion || DB_VERSION);
+              } catch (error) {
+                console.error("Migration failed:", error);
+                reject(error);
+              }
+            };
+            request.onblocked = () => {
+              console.warn("Database upgrade blocked by another tab");
+              reject(new Error("Database upgrade blocked. Please close other tabs and try again."));
+            };
+          });
+        }
         /**
-         * Create table controls (sorting, filtering)
+         * Perform database schema migration
          */
-        createTableControls() {
-          const controls = createSafeElement("div", "", "table-controls");
-          const sortLabel = createSafeElement("label", "Sort by: ", "control-label");
-          const sortSelect = document.createElement("select");
-          sortSelect.className = "sort-select";
-          const sortOptions = [
-            { value: "role", label: "Role (Chronological)" },
-            { value: "project", label: "Project Name" },
-            { value: "created", label: "Created Date" }
-          ];
-          sortOptions.forEach((option) => {
-            const optionElement = document.createElement("option");
-            optionElement.value = option.value;
-            setSafeTextContent(optionElement, option.label);
-            if (option.value === this.state.sortBy) {
-              optionElement.selected = true;
+        performMigration(db, oldVersion, newVersion) {
+          console.log(`Migrating database from version ${oldVersion} to ${newVersion}`);
+          if (oldVersion < 1) {
+            this.createInitialSchema(db);
+          }
+        }
+        /**
+         * Create initial database schema
+         */
+        createInitialSchema(db) {
+          for (const storeConfig of DATABASE_SCHEMA.stores) {
+            if (!validateStoreConfig(storeConfig)) {
+              throw new Error(`Invalid store configuration: ${storeConfig.name}`);
             }
-            sortSelect.appendChild(optionElement);
-          });
-          sortSelect.addEventListener("change", () => {
-            this.state.sortBy = sortSelect.value;
-            this.dispatchSortChange();
-          });
-          controls.appendChild(sortLabel);
-          controls.appendChild(sortSelect);
-          return controls;
-        }
-        /**
-         * Dispatch custom event when sort changes
-         */
-        dispatchSortChange() {
-          const event = new CustomEvent("sort-change", {
-            detail: { sortBy: this.state.sortBy, sortDirection: this.state.sortDirection }
-          });
-          this.container.dispatchEvent(event);
-        }
-        // ============================================================================
-        // Table Structure
-        // ============================================================================
-        /**
-         * Create table header
-         */
-        createTableHeader() {
-          const thead = createSafeElement("thead", "", "table-header");
-          const headerRow = createSafeElement("tr", "", "header-row");
-          const headers = [
-            { text: "Role", class: "role-header" },
-            { text: "Project", class: "project-header" },
-            { text: "Bullet Text", class: "text-header" },
-            { text: "State", class: "state-header" },
-            { text: "Quality", class: "quality-header" },
-            { text: "Created", class: "created-header" }
-          ];
-          headers.forEach((header) => {
-            const th = createSafeElement("th", header.text, header.class);
-            headerRow.appendChild(th);
-          });
-          thead.appendChild(headerRow);
-          return thead;
-        }
-        /**
-         * Create table body with sorted data
-         */
-        createTableBody(bullets, roles, projects) {
-          const tbody = createSafeElement("tbody", "", "table-body");
-          const sortedBullets = this.sortBullets(bullets, roles, projects);
-          sortedBullets.forEach((bullet) => {
-            const role = roles.find((r) => r.id === bullet.roleId);
-            const project = projects.find((p) => p.id === bullet.projectId);
-            if (role && project) {
-              const row = this.createBulletRow(bullet, role, project);
-              tbody.appendChild(row);
+            const store = db.createObjectStore(storeConfig.name, {
+              keyPath: storeConfig.keyPath
+            });
+            if (storeConfig.indexes) {
+              for (const indexConfig of storeConfig.indexes) {
+                store.createIndex(
+                  indexConfig.name,
+                  indexConfig.keyPath,
+                  indexConfig.options || {}
+                );
+              }
             }
+          }
+          console.log("Initial database schema created successfully");
+        }
+        /**
+         * Close database connection
+         */
+        close() {
+          if (this.db) {
+            this.db.close();
+            this.db = null;
+            this.openPromise = null;
+          }
+        }
+        /**
+         * Get current database instance
+         */
+        getDatabase() {
+          return this.db;
+        }
+        /**
+         * Check if database is ready
+         */
+        isReady() {
+          return this.db !== null;
+        }
+      };
+      globalConnection = null;
+    }
+  });
+
+  // src/storage/transactions.ts
+  async function executeTransaction(storeNames, mode, operation) {
+    const db = await getDatabase();
+    const transaction = db.transaction(storeNames, mode);
+    const stores = {};
+    for (const storeName of storeNames) {
+      stores[storeName] = transaction.objectStore(storeName);
+    }
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => {
+        reject(new Error("Transaction timeout after 30 seconds"));
+      }, 3e4);
+    });
+    const operationPromise = operation(transaction, stores);
+    const completionPromise = new Promise((resolve, reject) => {
+      transaction.oncomplete = () => {
+        operationPromise.then(resolve).catch(reject);
+      };
+      transaction.onerror = () => {
+        reject(new Error(`Transaction failed: ${transaction.error?.message || "Unknown error"}`));
+      };
+      transaction.onabort = () => {
+        reject(new Error("Transaction was aborted"));
+      };
+    });
+    return Promise.race([completionPromise, timeoutPromise]);
+  }
+  async function getById(storeName, id) {
+    return executeTransaction([storeName], "readonly", async (_, stores) => {
+      return new Promise((resolve, reject) => {
+        const request = stores[storeName].get(id);
+        request.onsuccess = () => {
+          resolve(request.result || null);
+        };
+        request.onerror = () => {
+          reject(new Error(`Failed to get ${storeName} by ID: ${request.error?.message}`));
+        };
+      });
+    });
+  }
+  async function getAll(storeName) {
+    return executeTransaction([storeName], "readonly", async (_, stores) => {
+      return new Promise((resolve, reject) => {
+        const request = stores[storeName].getAll();
+        request.onsuccess = () => {
+          resolve(request.result || []);
+        };
+        request.onerror = () => {
+          reject(new Error(`Failed to get all ${storeName}: ${request.error?.message}`));
+        };
+      });
+    });
+  }
+  async function create(storeName, data) {
+    return executeTransaction([storeName], "readwrite", async (_, stores) => {
+      return new Promise((resolve, reject) => {
+        const request = stores[storeName].add(data);
+        request.onsuccess = () => {
+          resolve(data);
+        };
+        request.onerror = () => {
+          reject(new Error(`Failed to create ${storeName}: ${request.error?.message}`));
+        };
+      });
+    });
+  }
+  async function update(storeName, data) {
+    return executeTransaction([storeName], "readwrite", async (_, stores) => {
+      return new Promise((resolve, reject) => {
+        const request = stores[storeName].put(data);
+        request.onsuccess = () => {
+          resolve(data);
+        };
+        request.onerror = () => {
+          reject(new Error(`Failed to update ${storeName}: ${request.error?.message}`));
+        };
+      });
+    });
+  }
+  async function deleteById(storeName, id) {
+    return executeTransaction([storeName], "readwrite", async (_, stores) => {
+      return new Promise((resolve, reject) => {
+        const request = stores[storeName].delete(id);
+        request.onsuccess = () => {
+          resolve();
+        };
+        request.onerror = () => {
+          reject(new Error(`Failed to delete ${storeName}: ${request.error?.message}`));
+        };
+      });
+    });
+  }
+  async function getBulletsByState(state) {
+    return executeTransaction(["bullets"], "readonly", async (_, stores) => {
+      return new Promise((resolve, reject) => {
+        const index = stores.bullets.index("embeddingState");
+        const request = index.getAll(state);
+        request.onsuccess = () => {
+          resolve(request.result || []);
+        };
+        request.onerror = () => {
+          reject(new Error(`Failed to get bullets by state: ${request.error?.message}`));
+        };
+      });
+    });
+  }
+  var init_transactions = __esm({
+    "src/storage/transactions.ts"() {
+      "use strict";
+      init_database();
+    }
+  });
+
+  // src/storage/embedding-state.ts
+  function getEmbeddingStateMachine() {
+    if (!globalStateMachine) {
+      globalStateMachine = new EmbeddingStateMachine();
+    }
+    return globalStateMachine;
+  }
+  async function markBulletChanged(bulletId) {
+    const stateMachine = getEmbeddingStateMachine();
+    await stateMachine.transitionToStale(bulletId);
+  }
+  async function queueBulletForEmbedding(bulletId) {
+    const stateMachine = getEmbeddingStateMachine();
+    await stateMachine.transitionToPending(bulletId, QUEUE_PRIORITIES.HIGH);
+  }
+  var EmbeddingStateMachine, globalStateMachine;
+  var init_embedding_state = __esm({
+    "src/storage/embedding-state.ts"() {
+      "use strict";
+      init_transactions();
+      init_schema();
+      init_uuid();
+      EmbeddingStateMachine = class {
+        /**
+         * Transition bullet to pending state and add to queue
+         */
+        async transitionToPending(bulletId, priority = QUEUE_PRIORITIES.NORMAL) {
+          await executeTransaction(["bullets", "embedQueue"], "readwrite", async (_, stores) => {
+            const bulletRequest = stores.bullets.get(bulletId);
+            const bullet = await new Promise((resolve, reject) => {
+              bulletRequest.onsuccess = () => {
+                if (bulletRequest.result) {
+                  resolve(bulletRequest.result);
+                } else {
+                  reject(new Error(`Bullet not found: ${bulletId}`));
+                }
+              };
+              bulletRequest.onerror = () => reject(bulletRequest.error);
+            });
+            const updatedBullet = {
+              ...bullet,
+              embeddingState: EMBEDDING_STATES.PENDING,
+              lastModified: Date.now()
+            };
+            await new Promise((resolve, reject) => {
+              const updateRequest = stores.bullets.put(updatedBullet);
+              updateRequest.onsuccess = () => resolve();
+              updateRequest.onerror = () => reject(updateRequest.error);
+            });
+            const queueIndex = stores.embedQueue.index("bulletId");
+            const existingRequest = queueIndex.get(bulletId);
+            await new Promise((resolve, reject) => {
+              existingRequest.onsuccess = () => {
+                if (!existingRequest.result) {
+                  const queueItem = {
+                    id: createId("embed_queue"),
+                    bulletId,
+                    priority,
+                    createdAt: Date.now(),
+                    retryCount: 0
+                  };
+                  const addRequest = stores.embedQueue.add(queueItem);
+                  addRequest.onsuccess = () => resolve();
+                  addRequest.onerror = () => reject(addRequest.error);
+                } else {
+                  resolve();
+                }
+              };
+              existingRequest.onerror = () => reject(existingRequest.error);
+            });
           });
-          return tbody;
         }
-        // ============================================================================
-        // Row Creation
-        // ============================================================================
         /**
-         * Create individual bullet row
+         * Transition bullet to ready state and remove from queue
          */
-        createBulletRow(bullet, role, project) {
-          const row = createSafeElement("tr", "", "bullet-row");
-          const roleCell = createSafeElement("td", "", "role-cell");
-          setSafeTextContent(roleCell, `${role.title} - ${role.company}`);
-          const projectCell = createSafeElement("td", "", "project-cell");
-          setSafeTextContent(projectCell, project.name);
-          const textCell = createSafeElement("td", "", "text-cell");
-          const truncatedText = bullet.text.length > 80 ? bullet.text.substring(0, 80) + "..." : bullet.text;
-          setSafeTextContent(textCell, truncatedText);
-          textCell.title = bullet.text;
-          const stateCell = createSafeElement("td", "", "state-cell");
-          const stateBadge = this.createStateBadge(bullet.embeddingState);
-          stateCell.appendChild(stateBadge);
-          const qualityCell = createSafeElement("td", "", "quality-cell");
-          const qualityIndicators = this.createQualityIndicators(bullet.features);
-          qualityCell.appendChild(qualityIndicators);
-          const createdCell = createSafeElement("td", "", "created-cell");
-          const createdDate = new Date(bullet.createdAt).toLocaleDateString();
-          setSafeTextContent(createdCell, createdDate);
-          row.appendChild(roleCell);
-          row.appendChild(projectCell);
-          row.appendChild(textCell);
-          row.appendChild(stateCell);
-          row.appendChild(qualityCell);
-          row.appendChild(createdCell);
-          return row;
+        async transitionToReady(bulletId) {
+          await executeTransaction(["bullets", "embedQueue"], "readwrite", async (_, stores) => {
+            const bulletRequest = stores.bullets.get(bulletId);
+            const bullet = await new Promise((resolve, reject) => {
+              bulletRequest.onsuccess = () => {
+                if (bulletRequest.result) {
+                  resolve(bulletRequest.result);
+                } else {
+                  reject(new Error(`Bullet not found: ${bulletId}`));
+                }
+              };
+              bulletRequest.onerror = () => reject(bulletRequest.error);
+            });
+            const updatedBullet = {
+              ...bullet,
+              embeddingState: EMBEDDING_STATES.READY,
+              lastEmbeddedAt: Date.now(),
+              retryCount: 0,
+              lastModified: Date.now()
+            };
+            await new Promise((resolve, reject) => {
+              const updateRequest = stores.bullets.put(updatedBullet);
+              updateRequest.onsuccess = () => resolve();
+              updateRequest.onerror = () => reject(updateRequest.error);
+            });
+            const queueIndex = stores.embedQueue.index("bulletId");
+            const queueRequest = queueIndex.get(bulletId);
+            await new Promise((resolve, reject) => {
+              queueRequest.onsuccess = () => {
+                if (queueRequest.result) {
+                  const deleteRequest = stores.embedQueue.delete(queueRequest.result.id);
+                  deleteRequest.onsuccess = () => resolve();
+                  deleteRequest.onerror = () => reject(deleteRequest.error);
+                } else {
+                  resolve();
+                }
+              };
+              queueRequest.onerror = () => reject(queueRequest.error);
+            });
+          });
         }
-        // ============================================================================
-        // Badge and Indicator Creation
-        // ============================================================================
         /**
-         * Create embedding state badge with proper styling
+         * Transition bullet to stale state (when text changes)
          */
-        createStateBadge(state) {
-          const badge = createSafeElement("span", "", `state-badge state-badge--${state}`);
-          const stateConfig = {
-            ready: { text: "\u2705 Ready", class: "ready" },
-            pending: { text: "\u23F3 Pending", class: "pending" },
-            stale: { text: "\u26A0\uFE0F Stale", class: "stale" },
-            failed: { text: "\u274C Failed", class: "failed" }
+        async transitionToStale(bulletId) {
+          const bullet = await getById("bullets", bulletId);
+          if (!bullet) {
+            throw new Error(`Bullet not found: ${bulletId}`);
+          }
+          const updatedBullet = {
+            ...bullet,
+            embeddingState: EMBEDDING_STATES.STALE,
+            lastModified: Date.now()
           };
-          const config = stateConfig[state] || { text: "\u2753 Unknown", class: "unknown" };
-          setSafeTextContent(badge, config.text);
-          return badge;
+          await update("bullets", updatedBullet);
         }
         /**
-         * Create quality feature indicators
+         * Transition bullet to failed state with retry logic
          */
-        createQualityIndicators(features) {
-          const container = createSafeElement("div", "", "quality-indicators");
-          const indicators = [
-            { key: "hasNumbers", symbol: "\u{1F4CA}", active: features.hasNumbers, title: "Has quantified results" },
-            { key: "actionVerb", symbol: "\u26A1", active: features.actionVerb, title: "Strong action verb" },
-            { key: "lengthOk", symbol: "\u{1F4CF}", active: features.lengthOk, title: "Appropriate length" }
-          ];
-          indicators.forEach((indicator) => {
-            const span = createSafeElement("span", "", `quality-indicator ${indicator.active ? "active" : "inactive"}`);
-            setSafeTextContent(span, indicator.symbol);
-            span.title = indicator.title;
-            container.appendChild(span);
-          });
-          return container;
-        }
-        // ============================================================================
-        // Data Sorting (Deterministic as per Plan)
-        // ============================================================================
-        /**
-         * Sort bullets based on current criteria with deterministic ordering
-         */
-        sortBullets(bullets, roles, projects) {
-          return bullets.slice().sort((a, b) => {
-            let comparison = 0;
-            switch (this.state.sortBy) {
-              case "role":
-                const roleA = roles.find((r) => r.id === a.roleId);
-                const roleB = roles.find((r) => r.id === b.roleId);
-                if (roleA && roleB) {
-                  comparison = roleA.orderIndex - roleB.orderIndex;
-                  if (comparison === 0) {
-                    const projectA = projects.find((p) => p.id === a.projectId);
-                    const projectB = projects.find((p) => p.id === b.projectId);
-                    if (projectA && projectB) {
-                      comparison = projectA.name.localeCompare(projectB.name);
-                    }
-                    if (comparison === 0) {
-                      comparison = a.createdAt - b.createdAt;
-                    }
-                  }
+        async transitionToFailed(bulletId) {
+          await executeTransaction(["bullets", "embedQueue"], "readwrite", async (_, stores) => {
+            const bulletRequest = stores.bullets.get(bulletId);
+            const bullet = await new Promise((resolve, reject) => {
+              bulletRequest.onsuccess = () => {
+                if (bulletRequest.result) {
+                  resolve(bulletRequest.result);
+                } else {
+                  reject(new Error(`Bullet not found: ${bulletId}`));
                 }
-                break;
-              case "project":
-                const projA = projects.find((p) => p.id === a.projectId);
-                const projB = projects.find((p) => p.id === b.projectId);
-                if (projA && projB) {
-                  comparison = projA.name.localeCompare(projB.name);
-                  if (comparison === 0) {
-                    comparison = a.createdAt - b.createdAt;
+              };
+              bulletRequest.onerror = () => reject(bulletRequest.error);
+            });
+            const retryCount = bullet.retryCount + 1;
+            const shouldRetry = retryCount <= EMBEDDING_RETRY_LIMITS.MAX_RETRIES;
+            if (shouldRetry) {
+              const updatedBullet = {
+                ...bullet,
+                embeddingState: EMBEDDING_STATES.PENDING,
+                retryCount,
+                lastModified: Date.now()
+              };
+              await new Promise((resolve, reject) => {
+                const updateRequest = stores.bullets.put(updatedBullet);
+                updateRequest.onsuccess = () => resolve();
+                updateRequest.onerror = () => reject(updateRequest.error);
+              });
+              const queueIndex = stores.embedQueue.index("bulletId");
+              const queueRequest = queueIndex.get(bulletId);
+              await new Promise((resolve, reject) => {
+                queueRequest.onsuccess = () => {
+                  if (queueRequest.result) {
+                    const delayMs = EMBEDDING_RETRY_LIMITS.BACKOFF_BASE * Math.pow(EMBEDDING_RETRY_LIMITS.BACKOFF_MULTIPLIER, retryCount - 1);
+                    const updatedQueueItem = {
+                      ...queueRequest.result,
+                      retryCount,
+                      createdAt: Date.now() + delayMs
+                      // Delay retry
+                    };
+                    const updateRequest = stores.embedQueue.put(updatedQueueItem);
+                    updateRequest.onsuccess = () => resolve();
+                    updateRequest.onerror = () => reject(updateRequest.error);
+                  } else {
+                    resolve();
                   }
-                }
-                break;
-              case "created":
-                comparison = a.createdAt - b.createdAt;
-                if (comparison === 0) {
-                  const roleA2 = roles.find((r) => r.id === a.roleId);
-                  const roleB2 = roles.find((r) => r.id === b.roleId);
-                  if (roleA2 && roleB2) {
-                    comparison = roleA2.orderIndex - roleB2.orderIndex;
+                };
+                queueRequest.onerror = () => reject(queueRequest.error);
+              });
+            } else {
+              const updatedBullet = {
+                ...bullet,
+                embeddingState: EMBEDDING_STATES.FAILED,
+                retryCount,
+                lastModified: Date.now()
+              };
+              await new Promise((resolve, reject) => {
+                const updateRequest = stores.bullets.put(updatedBullet);
+                updateRequest.onsuccess = () => resolve();
+                updateRequest.onerror = () => reject(updateRequest.error);
+              });
+              const queueIndex = stores.embedQueue.index("bulletId");
+              const queueRequest = queueIndex.get(bulletId);
+              await new Promise((resolve, reject) => {
+                queueRequest.onsuccess = () => {
+                  if (queueRequest.result) {
+                    const deleteRequest = stores.embedQueue.delete(queueRequest.result.id);
+                    deleteRequest.onsuccess = () => resolve();
+                    deleteRequest.onerror = () => reject(deleteRequest.error);
+                  } else {
+                    resolve();
                   }
-                }
-                break;
+                };
+                queueRequest.onerror = () => reject(queueRequest.error);
+              });
             }
-            return this.state.sortDirection === "desc" ? -comparison : comparison;
           });
+        }
+        /**
+         * Get bullets by state with pagination
+         */
+        async getBulletsByState(state, limit, offset) {
+          const bullets = await getBulletsByState(state);
+          if (limit !== void 0) {
+            const start = offset || 0;
+            return bullets.slice(start, start + limit);
+          }
+          return bullets;
+        }
+        /**
+         * Get embedding queue with priority ordering
+         */
+        async getQueue(limit) {
+          return executeTransaction(["embedQueue"], "readonly", async (_, stores) => {
+            return new Promise((resolve, reject) => {
+              const index = stores.embedQueue.index("priority_created");
+              const request = limit ? index.getAll(null, limit) : index.getAll();
+              request.onsuccess = () => {
+                const items = request.result || [];
+                const now = Date.now();
+                const readyItems = items.filter((item) => item.createdAt <= now);
+                readyItems.sort((a, b) => {
+                  if (a.priority !== b.priority) {
+                    return a.priority - b.priority;
+                  }
+                  return a.createdAt - b.createdAt;
+                });
+                resolve(limit ? readyItems.slice(0, limit) : readyItems);
+              };
+              request.onerror = () => {
+                reject(new Error(`Failed to get queue: ${request.error?.message}`));
+              };
+            });
+          });
+        }
+        /**
+         * Peek at next queue item without removing it
+         */
+        async peekQueue() {
+          const items = await this.getQueue(1);
+          return items.length > 0 ? items[0] || null : null;
+        }
+        /**
+         * Remove item from queue (for processing)
+         */
+        async dequeue(queueItemId) {
+          await deleteById("embedQueue", queueItemId);
+        }
+        /**
+         * Get queue statistics
+         */
+        async getQueueStats() {
+          const items = await this.getQueue();
+          const oldestItem = items.length > 0 ? Math.min(...items.map((i) => i.createdAt)) : void 0;
+          const stats = {
+            total: items.length,
+            byPriority: {},
+            oldestItem,
+            avgRetryCount: items.length > 0 ? items.reduce((sum, i) => sum + i.retryCount, 0) / items.length : 0
+          };
+          for (const item of items) {
+            stats.byPriority[item.priority] = (stats.byPriority[item.priority] || 0) + 1;
+          }
+          return stats;
+        }
+        /**
+         * Clear failed items from queue (cleanup)
+         */
+        async clearFailedQueue() {
+          return executeTransaction(["embedQueue", "bullets"], "readwrite", async (_, stores) => {
+            let clearedCount = 0;
+            const queueRequest = stores.embedQueue.getAll();
+            const queueItems = await new Promise((resolve, reject) => {
+              queueRequest.onsuccess = () => resolve(queueRequest.result || []);
+              queueRequest.onerror = () => reject(queueRequest.error);
+            });
+            for (const queueItem of queueItems) {
+              const bulletRequest = stores.bullets.get(queueItem.bulletId);
+              const bullet = await new Promise((resolve, reject) => {
+                bulletRequest.onsuccess = () => resolve(bulletRequest.result || null);
+                bulletRequest.onerror = () => reject(bulletRequest.error);
+              });
+              if (!bullet || bullet.embeddingState === EMBEDDING_STATES.FAILED) {
+                await new Promise((resolve, reject) => {
+                  const deleteRequest = stores.embedQueue.delete(queueItem.id);
+                  deleteRequest.onsuccess = () => {
+                    clearedCount++;
+                    resolve();
+                  };
+                  deleteRequest.onerror = () => reject(deleteRequest.error);
+                });
+              }
+            }
+            return clearedCount;
+          });
+        }
+        /**
+         * Reset all stale bullets to pending (for reprocessing)
+         */
+        async requeueStale(priority = QUEUE_PRIORITIES.LOW) {
+          const staleBullets = await this.getBulletsByState(EMBEDDING_STATES.STALE);
+          for (const bullet of staleBullets) {
+            await this.transitionToPending(bullet.id, priority);
+          }
+          return staleBullets.length;
+        }
+        /**
+         * Coalesce duplicate queue entries (cleanup)
+         */
+        async coalesceQueue() {
+          return executeTransaction(["embedQueue"], "readwrite", async (_, stores) => {
+            const seenBullets = /* @__PURE__ */ new Set();
+            let removedCount = 0;
+            const index = stores.embedQueue.index("priority_created");
+            const cursor = index.openCursor();
+            await new Promise((resolve, reject) => {
+              cursor.onsuccess = () => {
+                const cursorResult = cursor.result;
+                if (cursorResult) {
+                  const queueItem = cursorResult.value;
+                  if (seenBullets.has(queueItem.bulletId)) {
+                    cursorResult.delete();
+                    removedCount++;
+                  } else {
+                    seenBullets.add(queueItem.bulletId);
+                  }
+                  cursorResult.continue();
+                } else {
+                  resolve();
+                }
+              };
+              cursor.onerror = () => reject(cursor.error);
+            });
+            return removedCount;
+          });
+        }
+      };
+      globalStateMachine = null;
+    }
+  });
+
+  // src/ui/bullet-validator.ts
+  var BulletValidator;
+  var init_bullet_validator = __esm({
+    "src/ui/bullet-validator.ts"() {
+      "use strict";
+      init_xss_safe_rendering();
+      BulletValidator = class {
+        validate(data) {
+          const errors = [];
+          if (!data.text) errors.push("Please enter bullet point text");
+          if (data.text.length > 500) errors.push("Bullet point is too long (maximum 500 characters)");
+          if (data.roleId === "new_role" && (!data.newRoleTitle || !data.newRoleCompany)) {
+            errors.push("Please enter role title and company");
+          }
+          if (data.projectId === "new_project" && !data.newProjectName) {
+            errors.push("Please enter project name");
+          }
+          return { isValid: errors.length === 0, errors };
+        }
+        analyzeFeatures(text) {
+          const wordCount = text.trim().split(/\s+/).length;
+          return {
+            hasNumbers: /\d/.test(text),
+            actionVerb: /^(led|managed|developed|created|built|achieved|analyzed|designed|implemented)/i.test(text.trim()),
+            lengthOk: wordCount >= 5 && wordCount <= 22
+          };
+        }
+        updateCharCounter(text, counter) {
+          const length = text.length;
+          const maxLength = 500;
+          setSafeTextContent(counter, `${length}/${maxLength} characters`);
+          if (length > maxLength * 0.9) {
+            counter.className = "char-counter char-counter--warning";
+          } else if (length > maxLength) {
+            counter.className = "char-counter char-counter--error";
+          } else {
+            counter.className = "char-counter";
+          }
         }
       };
     }
   });
 
-  // src/data/sample-data.ts
-  function getSampleDataset() {
-    return {
-      roles: SAMPLE_ROLES,
-      projects: SAMPLE_PROJECTS,
-      bullets: SAMPLE_BULLETS
-    };
-  }
-  function getEmbeddingStateSummary() {
-    const states = SAMPLE_BULLETS.reduce((acc, bullet) => {
-      acc[bullet.embeddingState] = (acc[bullet.embeddingState] || 0) + 1;
-      return acc;
-    }, {});
-    return {
-      ready: states.ready || 0,
-      pending: states.pending || 0,
-      stale: states.stale || 0,
-      failed: states.failed || 0,
-      total: SAMPLE_BULLETS.length
-    };
-  }
-  var SAMPLE_ROLES, SAMPLE_PROJECTS, SAMPLE_BULLETS;
-  var init_sample_data = __esm({
-    "src/data/sample-data.ts"() {
+  // src/ui/bullet-form-builder.ts
+  var BulletFormBuilder;
+  var init_bullet_form_builder = __esm({
+    "src/ui/bullet-form-builder.ts"() {
       "use strict";
-      SAMPLE_ROLES = [
-        {
-          id: "role_mckinsey_sc_001",
-          title: "Senior Consultant",
-          company: "McKinsey & Company",
-          orderIndex: 0,
-          bulletsLimit: 4,
-          startDate: "2022-06",
-          endDate: null
-          // Current role
-        },
-        {
-          id: "role_bcg_consultant_002",
-          title: "Consultant",
-          company: "Boston Consulting Group",
-          orderIndex: 1,
-          bulletsLimit: 3,
-          startDate: "2020-09",
-          endDate: "2022-05"
-        },
-        {
-          id: "role_goldman_analyst_003",
-          title: "Investment Banking Analyst",
-          company: "Goldman Sachs",
-          orderIndex: 2,
-          bulletsLimit: 3,
-          startDate: "2018-07",
-          endDate: "2020-08"
+      init_bullet_validator();
+      init_xss_safe_rendering();
+      init_transactions();
+      BulletFormBuilder = class {
+        validator = new BulletValidator();
+        roles = [];
+        projects = [];
+        async createForm(config, isEdit, onSubmit, onCancel) {
+          await this.loadData();
+          const form = createSafeElement("form", "", "bullet-form");
+          form.append(
+            this.createRoleSection(config.defaultRoleId),
+            this.createProjectSection(config.defaultRoleId, config.defaultProjectId),
+            this.createTextSection(config.bullet?.text || ""),
+            this.createQualitySection(),
+            this.createButtonSection(isEdit, onCancel)
+          );
+          this.setupEvents(form, onSubmit);
+          this.updateQualityPreview(form, config.bullet?.text || "");
+          return form;
         }
-      ];
-      SAMPLE_PROJECTS = [
-        {
-          id: "proj_telecom_transform_001",
-          roleId: "role_mckinsey_sc_001",
-          name: "Global Telecom Transformation",
-          description: "Core network modernization and go-to-market strategy",
-          centroidVector: new ArrayBuffer(1536 * 4),
-          vectorDimensions: 1536,
-          bulletCount: 3,
-          embeddingVersion: 1,
-          createdAt: 16725312e5,
-          updatedAt: Date.now()
-        },
-        {
-          id: "proj_healthcare_ma_002",
-          roleId: "role_mckinsey_sc_001",
-          name: "Healthcare M&A Due Diligence",
-          description: "Strategic and operational due diligence for $2.5B acquisition",
-          centroidVector: new ArrayBuffer(1536 * 4),
-          vectorDimensions: 1536,
-          bulletCount: 2,
-          embeddingVersion: 1,
-          createdAt: 16752096e5,
-          updatedAt: Date.now()
+        createRoleSection(defaultRoleId) {
+          const group = createSafeElement("div", "", "form-group");
+          const label = createSafeElement("label", "Role", "form-label");
+          const select = document.createElement("select");
+          select.id = "bullet-role";
+          select.className = "form-select";
+          this.roles.forEach((role) => {
+            const option = document.createElement("option");
+            option.value = role.id;
+            option.textContent = `${role.title} (${role.company})`;
+            option.selected = role.id === defaultRoleId;
+            select.appendChild(option);
+          });
+          const newOption = document.createElement("option");
+          newOption.value = "new_role";
+          newOption.textContent = "+ New Role";
+          select.appendChild(newOption);
+          const newInputs = this.createNewRoleInputs();
+          group.append(label, select, newInputs);
+          return group;
         }
-      ];
-      SAMPLE_BULLETS = [
-        {
-          id: "bullet_telecom_001",
-          roleId: "role_mckinsey_sc_001",
-          projectId: "proj_telecom_transform_001",
-          text: "Led cross-functional team of 12 engineers to develop 5G infrastructure demand forecast model, achieving 15% improvement in accuracy",
-          source: "manual",
-          normalizedFingerprint: "led cross functional team of <NUM> engineers to develop <NUM> infrastructure demand forecast model achieving <NUM> improvement in accuracy",
-          features: {
-            hasNumbers: true,
-            actionVerb: true,
-            lengthOk: true
-          },
-          embeddingState: "ready",
-          lastEmbeddedAt: Date.now() - 864e5,
-          retryCount: 0,
-          createdAt: 16725312e5,
-          lastModified: 16725312e5
-        },
-        {
-          id: "bullet_telecom_002",
-          roleId: "role_mckinsey_sc_001",
-          projectId: "proj_telecom_transform_001",
-          text: "Designed go-to-market strategy for new network services, conducting market analysis across 8 regions",
-          source: "manual",
-          normalizedFingerprint: "designed go to market strategy for new network services conducting market analysis across <NUM> regions",
-          features: {
-            hasNumbers: true,
-            actionVerb: true,
-            lengthOk: true
-          },
-          embeddingState: "pending",
-          retryCount: 1,
-          createdAt: 16726176e5,
-          lastModified: Date.now()
+        createProjectSection(defaultRoleId, defaultProjectId) {
+          const group = createSafeElement("div", "", "form-group");
+          const label = createSafeElement("label", "Project", "form-label");
+          const select = document.createElement("select");
+          select.id = "bullet-project";
+          select.className = "form-select";
+          this.updateProjectOptions(select, defaultRoleId, defaultProjectId);
+          const newInputs = this.createNewProjectInputs();
+          group.append(label, select, newInputs);
+          return group;
         }
-      ];
+        createTextSection(defaultText) {
+          const group = createSafeElement("div", "", "form-group");
+          const label = createSafeElement("label", "Bullet Point Text", "form-label");
+          const textarea = document.createElement("textarea");
+          const counter = createSafeElement("div", "", "char-counter");
+          textarea.id = "bullet-text";
+          textarea.className = "form-textarea";
+          textarea.placeholder = "Enter your bullet point...";
+          textarea.rows = 4;
+          textarea.value = defaultText;
+          textarea.disabled = false;
+          this.validator.updateCharCounter(defaultText, counter);
+          group.append(label, textarea, counter);
+          textarea.addEventListener("input", (e) => {
+            console.log("Text input working:", textarea.value.length);
+          });
+          return group;
+        }
+        createQualitySection() {
+          const group = createSafeElement("div", "", "form-group");
+          const label = createSafeElement("label", "Quality Indicators", "form-label");
+          const preview = createSafeElement("div", "", "quality-preview");
+          group.append(label, preview);
+          return group;
+        }
+        createButtonSection(isEdit, onCancel) {
+          const group = createSafeElement("div", "", "modal-buttons");
+          const cancelBtn = document.createElement("button");
+          const saveBtn = document.createElement("button");
+          cancelBtn.type = "button";
+          cancelBtn.textContent = "Cancel";
+          cancelBtn.className = "btn btn-secondary";
+          cancelBtn.onclick = onCancel;
+          saveBtn.type = "submit";
+          saveBtn.textContent = isEdit ? "Update" : "Create";
+          saveBtn.className = "btn btn-primary";
+          group.append(cancelBtn, saveBtn);
+          return group;
+        }
+        createNewRoleInputs() {
+          const container = createSafeElement("div", "", "new-role-input hidden");
+          const titleInput = document.createElement("input");
+          const companyInput = document.createElement("input");
+          titleInput.id = "new-role-title";
+          titleInput.placeholder = "Role title";
+          titleInput.className = "form-input";
+          companyInput.id = "new-role-company";
+          companyInput.placeholder = "Company name";
+          companyInput.className = "form-input";
+          container.append(titleInput, companyInput);
+          titleInput.addEventListener("input", (e) => {
+            console.log("Role title input working");
+          });
+          return container;
+        }
+        createNewProjectInputs() {
+          const container = createSafeElement("div", "", "new-project-input hidden");
+          const nameInput = document.createElement("input");
+          const descInput = document.createElement("textarea");
+          nameInput.id = "new-project-name";
+          nameInput.placeholder = "Project name";
+          nameInput.className = "form-input";
+          descInput.id = "new-project-description";
+          descInput.placeholder = "Description (optional)";
+          descInput.className = "form-textarea";
+          descInput.rows = 2;
+          container.append(nameInput, descInput);
+          return container;
+        }
+        setupEvents(form, onSubmit) {
+          const roleSelect = form.querySelector("#bullet-role");
+          const projectSelect = form.querySelector("#bullet-project");
+          const textInput = form.querySelector("#bullet-text");
+          const newRoleInputs = form.querySelector(".new-role-input");
+          const newProjectInputs = form.querySelector(".new-project-input");
+          if (roleSelect.value === "new_role") {
+            newRoleInputs.classList.remove("hidden");
+          }
+          if (projectSelect.value === "new_project") {
+            newProjectInputs.classList.remove("hidden");
+          }
+          roleSelect.addEventListener("change", () => {
+            console.log("Role changed to:", roleSelect.value);
+            if (roleSelect.value === "new_role") {
+              newRoleInputs.classList.remove("hidden");
+              this.updateProjectOptions(projectSelect, void 0);
+            } else {
+              newRoleInputs.classList.add("hidden");
+              this.updateProjectOptions(projectSelect, roleSelect.value);
+            }
+          });
+          textInput.addEventListener("input", () => {
+            console.log("Text input working, length:", textInput.value.length);
+            const counter = form.querySelector(".char-counter");
+            this.validator.updateCharCounter(textInput.value, counter);
+            this.updateQualityPreview(form, textInput.value);
+          });
+          roleSelect.onchange = () => {
+            const newRoleInputs2 = form.querySelector(".new-role-input");
+            if (roleSelect.value === "new_role") {
+              newRoleInputs2.classList.remove("hidden");
+            } else {
+              newRoleInputs2.classList.add("hidden");
+              this.updateProjectOptions(projectSelect, roleSelect.value);
+            }
+          };
+          projectSelect.onchange = () => {
+            const newProjectInputs2 = form.querySelector(".new-project-input");
+            newProjectInputs2.classList.toggle("hidden", projectSelect.value !== "new_project");
+          };
+          textInput.oninput = () => {
+            const counter = form.querySelector(".char-counter");
+            this.validator.updateCharCounter(textInput.value, counter);
+            this.updateQualityPreview(form, textInput.value);
+          };
+          form.onsubmit = async (e) => {
+            e.preventDefault();
+            const data = this.getFormData(form);
+            const validation = this.validator.validate(data);
+            if (!validation.isValid) {
+              alert(validation.errors.join("\n"));
+              return;
+            }
+            await onSubmit(data);
+          };
+          roleSelect.addEventListener("change", (e) => {
+            console.log("Role changed to:", roleSelect.value);
+            const selectedRole = roleSelect.value;
+            if (selectedRole === "new_role") {
+              newRoleInputs.classList.remove("hidden");
+              this.updateProjectOptions(projectSelect, void 0);
+            } else {
+              newRoleInputs.classList.add("hidden");
+              this.updateProjectOptions(projectSelect, selectedRole);
+            }
+          });
+        }
+        updateProjectOptions(select, roleId, selectedId) {
+          select.innerHTML = "";
+          if (!roleId || roleId === "new_role") {
+            const option = document.createElement("option");
+            option.textContent = "Select a role first";
+            option.disabled = true;
+            select.appendChild(option);
+            return;
+          }
+          const noProjectOption = document.createElement("option");
+          noProjectOption.value = `no_project_${roleId}`;
+          noProjectOption.textContent = "No Project";
+          noProjectOption.selected = selectedId === `no_project_${roleId}`;
+          select.appendChild(noProjectOption);
+          this.projects.filter((p) => p.roleId === roleId).forEach((project) => {
+            const option = document.createElement("option");
+            option.value = project.id;
+            option.textContent = project.name;
+            option.selected = project.id === selectedId;
+            select.appendChild(option);
+          });
+          const newOption = document.createElement("option");
+          newOption.value = "new_project";
+          newOption.textContent = "+ New Project";
+          select.appendChild(newOption);
+        }
+        updateQualityPreview(form, text) {
+          const preview = form.querySelector(".quality-preview");
+          const features = this.validator.analyzeFeatures(text);
+          preview.innerHTML = "";
+          [
+            { key: "hasNumbers", label: "Contains Numbers", active: features.hasNumbers },
+            { key: "actionVerb", label: "Strong Action Verb", active: features.actionVerb },
+            { key: "lengthOk", label: "Good Length", active: features.lengthOk }
+          ].forEach((indicator) => {
+            const badge = createSafeElement(
+              "span",
+              indicator.label,
+              `quality-indicator ${indicator.active ? "quality-indicator--active" : "quality-indicator--inactive"}`
+            );
+            preview.appendChild(badge);
+          });
+        }
+        getFormData(form) {
+          return {
+            roleId: form.querySelector("#bullet-role").value,
+            projectId: form.querySelector("#bullet-project").value,
+            text: form.querySelector("#bullet-text").value.trim(),
+            newRoleTitle: form.querySelector("#new-role-title")?.value.trim(),
+            newRoleCompany: form.querySelector("#new-role-company")?.value.trim(),
+            newProjectName: form.querySelector("#new-project-name")?.value.trim(),
+            newProjectDescription: form.querySelector("#new-project-description")?.value.trim()
+          };
+        }
+        async loadData() {
+          [this.roles, this.projects] = await Promise.all([
+            getAll("roles"),
+            getAll("projects")
+          ]);
+          this.roles.sort((a, b) => a.orderIndex - b.orderIndex);
+        }
+      };
+    }
+  });
+
+  // src/ui/bullet-data-service.ts
+  var BulletDataService;
+  var init_bullet_data_service = __esm({
+    "src/ui/bullet-data-service.ts"() {
+      "use strict";
+      init_transactions();
+      init_embedding_state();
+      init_uuid();
+      BulletDataService = class {
+        roles = [];
+        projects = [];
+        async getBullet(bulletId) {
+          return getById("bullets", bulletId);
+        }
+        async createBullet(formData) {
+          const roleId = await this.ensureRole(formData);
+          const projectId = await this.ensureProject(formData, roleId);
+          const bullet = {
+            id: createId("bullet"),
+            roleId,
+            projectId,
+            text: formData.text,
+            source: "manual",
+            normalizedFingerprint: `temp_${Date.now()}`,
+            features: this.analyzeFeatures(formData.text),
+            embeddingState: "pending",
+            retryCount: 0,
+            createdAt: Date.now(),
+            lastModified: Date.now()
+          };
+          await create("bullets", bullet);
+          await queueBulletForEmbedding(bullet.id);
+        }
+        async updateBullet(bulletId, formData) {
+          const existingBullet = await getById("bullets", bulletId);
+          if (!existingBullet) throw new Error("Bullet not found");
+          const roleId = await this.ensureRole(formData);
+          const projectId = await this.ensureProject(formData, roleId);
+          const updatedBullet = {
+            ...existingBullet,
+            text: formData.text,
+            roleId,
+            projectId,
+            features: this.analyzeFeatures(formData.text),
+            lastModified: Date.now()
+          };
+          await update("bullets", updatedBullet);
+          if (existingBullet.text !== formData.text) {
+            await markBulletChanged(bulletId);
+          }
+        }
+        async ensureRole(data) {
+          if (data.roleId !== "new_role") return data.roleId;
+          await this.loadRoles();
+          const newRole = {
+            id: createId("role"),
+            title: data.newRoleTitle,
+            company: data.newRoleCompany,
+            orderIndex: this.roles.length,
+            bulletsLimit: 3,
+            startDate: (/* @__PURE__ */ new Date()).toISOString().slice(0, 7),
+            endDate: null
+          };
+          await create("roles", newRole);
+          this.roles.push(newRole);
+          return newRole.id;
+        }
+        async ensureProject(data, roleId) {
+          if (data.projectId !== "new_project") {
+            return data.projectId || `no_project_${roleId}`;
+          }
+          await this.loadProjects();
+          const newProject = {
+            id: createId("project"),
+            roleId,
+            name: data.newProjectName,
+            description: data.newProjectDescription || "",
+            centroidVector: new ArrayBuffer(0),
+            vectorDimensions: 0,
+            bulletCount: 0,
+            embeddingVersion: 1,
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+          };
+          await create("projects", newProject);
+          this.projects.push(newProject);
+          return newProject.id;
+        }
+        analyzeFeatures(text) {
+          const wordCount = text.trim().split(/\s+/).length;
+          return {
+            hasNumbers: /\d/.test(text),
+            actionVerb: /^(led|managed|developed|created|built|achieved|analyzed|designed|implemented)/i.test(text.trim()),
+            lengthOk: wordCount >= 5 && wordCount <= 22
+          };
+        }
+        async loadRoles() {
+          if (this.roles.length === 0) {
+            this.roles = await getAll("roles");
+          }
+        }
+        async loadProjects() {
+          if (this.projects.length === 0) {
+            this.projects = await getAll("projects");
+          }
+        }
+      };
+    }
+  });
+
+  // src/ui/bullet-editor.ts
+  function getBulletEditor() {
+    if (!globalBulletEditor) globalBulletEditor = new BulletEditor();
+    return globalBulletEditor;
+  }
+  var BulletEditor, globalBulletEditor;
+  var init_bullet_editor = __esm({
+    "src/ui/bullet-editor.ts"() {
+      "use strict";
+      init_bullet_form_builder();
+      init_bullet_data_service();
+      init_xss_safe_rendering();
+      BulletEditor = class {
+        modal = null;
+        formBuilder;
+        dataService;
+        constructor() {
+          this.formBuilder = new BulletFormBuilder();
+          this.dataService = new BulletDataService();
+        }
+        async showAddModal(defaultRoleId, defaultProjectId, onSave) {
+          await this.showModal({
+            title: "Add Bullet Point",
+            bullet: null,
+            ...defaultRoleId && { defaultRoleId },
+            ...defaultProjectId && { defaultProjectId }
+          }, false, onSave);
+        }
+        async showEditModal(bulletId, onSave) {
+          const bullet = await this.dataService.getBullet(bulletId);
+          if (!bullet) throw new Error("Bullet not found");
+          await this.showModal({
+            title: "Edit Bullet Point",
+            bullet,
+            defaultRoleId: bullet.roleId,
+            defaultProjectId: bullet.projectId
+          }, true, onSave);
+        }
+        async showModal(config, isEdit, onSave) {
+          this.hideModal();
+          this.modal = this.createModalStructure(config.title);
+          const form = await this.formBuilder.createForm(
+            config,
+            isEdit,
+            (data) => this.handleSubmit(data, isEdit, config.bullet?.id, onSave),
+            () => this.hideModal()
+          );
+          this.modal.querySelector(".modal-body").appendChild(form);
+          this.showModalElement();
+        }
+        createModalStructure(title) {
+          const modal = createSafeElement("div", "", "modal-overlay");
+          const content = createSafeElement("div", "", "modal-content bullet-editor-modal");
+          const header = createSafeElement("div", "", "modal-header");
+          const titleEl = createSafeElement("h3", title);
+          const closeBtn = createSafeElement("button", "\xD7", "modal-close");
+          const body = createSafeElement("div", "", "modal-body");
+          closeBtn.onclick = () => this.hideModal();
+          header.append(titleEl, closeBtn);
+          content.append(header, body);
+          modal.appendChild(content);
+          return modal;
+        }
+        showModalElement() {
+          const mainContent = document.querySelector(".main-content") || document.body;
+          mainContent.appendChild(this.modal);
+          console.log("Modal added to:", mainContent);
+          console.log("Modal in DOM:", document.contains(this.modal));
+          const textInput = this.modal.querySelector("#bullet-text");
+          console.log("Text input found:", textInput);
+          console.log("Text input disabled:", textInput.disabled);
+          setTimeout(() => {
+            textInput.focus();
+            console.log("Focused on text input");
+          }, 100);
+        }
+        async handleSubmit(data, isEdit, bulletId, onSave) {
+          try {
+            if (isEdit && bulletId) {
+              await this.dataService.updateBullet(bulletId, data);
+            } else {
+              await this.dataService.createBullet(data);
+            }
+            this.hideModal();
+            onSave?.();
+          } catch (error) {
+            alert("Failed to save bullet point");
+          }
+        }
+        hideModal() {
+          this.modal?.remove();
+          this.modal = null;
+          document.onkeydown = null;
+        }
+      };
+      globalBulletEditor = null;
+    }
+  });
+
+  // src/ui/project-editor.ts
+  function getProjectEditor() {
+    if (!globalProjectEditor) {
+      globalProjectEditor = new ProjectEditor();
+    }
+    return globalProjectEditor;
+  }
+  var ProjectEditor, globalProjectEditor;
+  var init_project_editor = __esm({
+    "src/ui/project-editor.ts"() {
+      "use strict";
+      init_transactions();
+      init_xss_safe_rendering();
+      init_uuid();
+      ProjectEditor = class {
+        modal = null;
+        currentProjectId = null;
+        onSave;
+        roles = [];
+        /**
+         * Show editor for new project
+         */
+        async showAddModal(defaultRoleId, onSave) {
+          this.currentProjectId = null;
+          this.onSave = onSave;
+          await this.loadRoles();
+          await this.showModal({
+            title: "Add Project",
+            project: null,
+            ...defaultRoleId && { defaultRoleId }
+          });
+        }
+        /**
+         * Show editor for existing project
+         */
+        async showEditModal(projectId, onSave) {
+          this.currentProjectId = projectId;
+          this.onSave = onSave;
+          await this.loadRoles();
+          const project = await getById("projects", projectId);
+          if (!project) {
+            throw new Error("Project not found");
+          }
+          await this.showModal({
+            title: "Edit Project",
+            project,
+            defaultRoleId: project.roleId
+          });
+        }
+        /**
+         * Load roles data
+         */
+        async loadRoles() {
+          this.roles = await getAll("roles");
+          this.roles.sort((a, b) => a.orderIndex - b.orderIndex);
+        }
+        /**
+         * Show the modal with form
+         */
+        async showModal(config) {
+          this.hideModal();
+          this.modal = this.createModalStructure(config.title);
+          const form = this.createForm(config);
+          this.modal.querySelector(".modal-body").appendChild(form);
+          this.showModalElement();
+        }
+        /**
+         * Create modal structure
+         */
+        createModalStructure(title) {
+          const modal = createSafeElement("div", "", "modal-overlay");
+          const content = createSafeElement("div", "", "modal-content project-editor-modal");
+          const header = createSafeElement("div", "", "modal-header");
+          const titleEl = createSafeElement("h3", title);
+          const closeBtn = createSafeElement("button", "\xD7", "modal-close");
+          const body = createSafeElement("div", "", "modal-body");
+          closeBtn.onclick = () => this.hideModal();
+          header.append(titleEl, closeBtn);
+          content.append(header, body);
+          modal.appendChild(content);
+          return modal;
+        }
+        /**
+         * Create form
+         */
+        createForm(config) {
+          const form = createSafeElement("form", "", "project-form");
+          const roleGroup = this.createRoleSelection(config.defaultRoleId);
+          const nameGroup = this.createNameInput(config.project?.name || "");
+          const descGroup = this.createDescriptionInput(config.project?.description || "");
+          const buttonGroup = this.createButtons(config.project !== null);
+          form.append(roleGroup, nameGroup, descGroup, buttonGroup);
+          form.onsubmit = async (e) => {
+            e.preventDefault();
+            await this.handleSubmit();
+          };
+          return form;
+        }
+        /**
+         * Create role selection
+         */
+        createRoleSelection(defaultRoleId) {
+          const group = createSafeElement("div", "", "form-group");
+          const label = createSafeElement("label", "Role", "form-label");
+          const select = document.createElement("select");
+          select.id = "project-role";
+          select.className = "form-select";
+          this.roles.forEach((role) => {
+            const option = document.createElement("option");
+            option.value = role.id;
+            option.textContent = `${role.title} (${role.company})`;
+            option.selected = role.id === defaultRoleId;
+            select.appendChild(option);
+          });
+          group.append(label, select);
+          return group;
+        }
+        /**
+         * Create name input
+         */
+        createNameInput(defaultName) {
+          const group = createSafeElement("div", "", "form-group");
+          const label = createSafeElement("label", "Project Name", "form-label");
+          const input = document.createElement("input");
+          input.id = "project-name";
+          input.type = "text";
+          input.className = "form-input";
+          input.placeholder = "Enter project name...";
+          input.value = defaultName;
+          input.required = true;
+          group.append(label, input);
+          return group;
+        }
+        /**
+         * Create description input
+         */
+        createDescriptionInput(defaultDescription) {
+          const group = createSafeElement("div", "", "form-group");
+          const label = createSafeElement("label", "Description", "form-label");
+          const textarea = document.createElement("textarea");
+          const counter = createSafeElement("div", "", "char-counter");
+          textarea.id = "project-description";
+          textarea.className = "form-textarea";
+          textarea.placeholder = "Enter project description (optional)...";
+          textarea.rows = 3;
+          textarea.value = defaultDescription;
+          this.updateCharCounter(defaultDescription, counter);
+          textarea.addEventListener("input", () => {
+            this.updateCharCounter(textarea.value, counter);
+          });
+          group.append(label, textarea, counter);
+          return group;
+        }
+        /**
+         * Create form buttons
+         */
+        createButtons(isEdit) {
+          const group = createSafeElement("div", "", "modal-buttons");
+          const cancelBtn = document.createElement("button");
+          cancelBtn.type = "button";
+          cancelBtn.textContent = "Cancel";
+          cancelBtn.className = "btn btn-secondary";
+          cancelBtn.onclick = () => this.hideModal();
+          const saveBtn = document.createElement("button");
+          saveBtn.type = "submit";
+          saveBtn.textContent = isEdit ? "Update" : "Create";
+          saveBtn.className = "btn btn-primary";
+          group.append(cancelBtn, saveBtn);
+          return group;
+        }
+        /**
+         * Show modal element and set up events
+         */
+        showModalElement() {
+          const mainContent = document.querySelector(".main-content") || document.body;
+          mainContent.appendChild(this.modal);
+          this.modal.onclick = (e) => e.target === this.modal && this.hideModal();
+          document.onkeydown = (e) => e.key === "Escape" && this.hideModal();
+          setTimeout(() => {
+            const nameInput = this.modal.querySelector("#project-name");
+            nameInput?.focus();
+          }, 100);
+        }
+        /**
+         * Handle form submission
+         */
+        async handleSubmit() {
+          if (!this.modal) return;
+          const formData = this.getFormData();
+          const validation = this.validateFormData(formData);
+          if (!validation.isValid) {
+            alert(validation.errors.join("\n"));
+            return;
+          }
+          try {
+            if (this.currentProjectId) {
+              await this.updateProject(this.currentProjectId, formData);
+            } else {
+              await this.createProject(formData);
+            }
+            this.hideModal();
+            if (this.onSave) {
+              this.onSave();
+            }
+          } catch (error) {
+            console.error("Failed to save project:", error);
+            alert("Failed to save project");
+          }
+        }
+        /**
+         * Get form data
+         */
+        getFormData() {
+          if (!this.modal) return {};
+          return {
+            roleId: this.modal.querySelector("#project-role").value,
+            name: this.modal.querySelector("#project-name").value.trim(),
+            description: this.modal.querySelector("#project-description").value.trim()
+          };
+        }
+        /**
+         * Validate form data
+         */
+        validateFormData(data) {
+          const errors = [];
+          if (!data.name) {
+            errors.push("Please enter a project name");
+          }
+          if (data.name.length > 100) {
+            errors.push("Project name is too long (maximum 100 characters)");
+          }
+          if (data.description.length > 500) {
+            errors.push("Description is too long (maximum 500 characters)");
+          }
+          if (!data.roleId) {
+            errors.push("Please select a role");
+          }
+          return {
+            isValid: errors.length === 0,
+            errors
+          };
+        }
+        /**
+         * Create new project
+         */
+        async createProject(formData) {
+          const project = {
+            id: createId("project"),
+            roleId: formData.roleId,
+            name: formData.name,
+            description: formData.description,
+            centroidVector: new ArrayBuffer(0),
+            vectorDimensions: 0,
+            bulletCount: 0,
+            embeddingVersion: 1,
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+          };
+          await create("projects", project);
+        }
+        /**
+         * Update existing project
+         */
+        async updateProject(projectId, formData) {
+          const existingProject = await getById("projects", projectId);
+          if (!existingProject) {
+            throw new Error("Project not found");
+          }
+          const updatedProject = {
+            ...existingProject,
+            roleId: formData.roleId,
+            name: formData.name,
+            description: formData.description,
+            updatedAt: Date.now()
+          };
+          await update("projects", updatedProject);
+        }
+        /**
+         * Update character counter
+         */
+        updateCharCounter(text, counter) {
+          const length = text.length;
+          const maxLength = 500;
+          setSafeTextContent(counter, `${length}/${maxLength} characters`);
+          if (length > maxLength * 0.9) {
+            counter.className = "char-counter char-counter--warning";
+          } else if (length > maxLength) {
+            counter.className = "char-counter char-counter--error";
+          } else {
+            counter.className = "char-counter";
+          }
+        }
+        /**
+         * Hide modal
+         */
+        hideModal() {
+          this.modal?.remove();
+          this.modal = null;
+          this.currentProjectId = null;
+          this.onSave = void 0;
+          document.onkeydown = null;
+        }
+      };
+      globalProjectEditor = null;
+    }
+  });
+
+  // src/ui/data-management.ts
+  var BulletPointsTable, ProjectsTable;
+  var init_data_management = __esm({
+    "src/ui/data-management.ts"() {
+      "use strict";
+      init_transactions();
+      init_embedding_state();
+      init_xss_safe_rendering();
+      init_bullet_editor();
+      init_project_editor();
+      BulletPointsTable = class {
+        container;
+        bullets = [];
+        projects = [];
+        roles = [];
+        sortBy = "created";
+        sortOrder = "desc";
+        filterText = "";
+        constructor(container) {
+          this.container = container;
+        }
+        /**
+         * Render the bullets table
+         */
+        async render() {
+          await this.loadData();
+          this.container.innerHTML = "";
+          const header = this.createHeader();
+          const table = await this.createTable();
+          this.container.appendChild(header);
+          this.container.appendChild(table);
+        }
+        /**
+         * Create table header with controls
+         */
+        createHeader() {
+          const header = createSafeElement("div", "", "bullets-header");
+          const addButton = createSafeElement("button", "+ Add Bullet Point", "btn btn-primary");
+          addButton.addEventListener("click", () => this.showAddBulletModal());
+          const filterInput = document.createElement("input");
+          filterInput.type = "text";
+          filterInput.placeholder = "Filter bullets...";
+          filterInput.className = "filter-input";
+          filterInput.value = this.filterText;
+          filterInput.addEventListener("input", (e) => {
+            this.filterText = e.target.value;
+            this.render();
+          });
+          const sortSelect = document.createElement("select");
+          sortSelect.className = "sort-select";
+          [
+            { value: "created", label: "Created Date" },
+            { value: "modified", label: "Modified Date" },
+            { value: "role", label: "Role" },
+            { value: "project", label: "Project" }
+          ].forEach((option) => {
+            const opt = document.createElement("option");
+            opt.value = option.value;
+            opt.textContent = option.label;
+            opt.selected = this.sortBy === option.value;
+            sortSelect.appendChild(opt);
+          });
+          sortSelect.addEventListener("change", (e) => {
+            this.sortBy = e.target.value;
+            this.render();
+          });
+          const orderButton = createSafeElement(
+            "button",
+            this.sortOrder === "asc" ? "\u2191" : "\u2193",
+            "btn btn-sm"
+          );
+          orderButton.addEventListener("click", () => {
+            this.sortOrder = this.sortOrder === "asc" ? "desc" : "asc";
+            this.render();
+          });
+          header.appendChild(addButton);
+          header.appendChild(filterInput);
+          header.appendChild(sortSelect);
+          header.appendChild(orderButton);
+          return header;
+        }
+        /**
+         * Create the bullets table
+         */
+        async createTable() {
+          const table = createSafeElement("table", "", "bullets-table data-table");
+          const thead = createSafeElement("thead");
+          const headerRow = createSafeElement("tr");
+          ["Role", "Project", "Bullet Text", "State", "Quality", "Modified", "Actions"].forEach((text) => {
+            const th = createSafeElement("th", text);
+            headerRow.appendChild(th);
+          });
+          thead.appendChild(headerRow);
+          table.appendChild(thead);
+          const tbody = createSafeElement("tbody");
+          const filteredBullets = this.getFilteredAndSortedBullets();
+          for (const bullet of filteredBullets) {
+            const row = await this.createBulletRow(bullet);
+            tbody.appendChild(row);
+          }
+          if (filteredBullets.length === 0) {
+            const emptyRow = createSafeElement("tr");
+            const emptyCell = document.createElement("td");
+            emptyCell.textContent = "No bullet points found";
+            emptyCell.className = "empty-state";
+            emptyCell.colSpan = 7;
+            emptyRow.appendChild(emptyCell);
+            tbody.appendChild(emptyRow);
+          }
+          table.appendChild(tbody);
+          return table;
+        }
+        /**
+         * Create a single bullet row
+         */
+        async createBulletRow(bullet) {
+          const row = createSafeElement(
+            "tr",
+            "",
+            `bullet-row bullet-row--${bullet.embeddingState}`
+          );
+          const role = this.roles.find((r) => r.id === bullet.roleId);
+          const roleCell = createSafeElement(
+            "td",
+            role ? `${role.title}
+${role.company}` : "Unknown Role",
+            "role-cell"
+          );
+          const projectCell = createSafeElement("td", "", "project-cell");
+          const projectSelect = await this.createProjectSelect(bullet);
+          projectCell.appendChild(projectSelect);
+          const textCell = createSafeElement("td", "", "text-cell");
+          const bulletElement = renderBulletPoint(bullet.text, bullet.embeddingState);
+          if (bullet.text.length > 80) {
+            const truncatedText = bullet.text.substring(0, 80) + "...";
+            setSafeTextContent(bulletElement.querySelector(".bullet-text") || bulletElement, truncatedText);
+            bulletElement.title = bullet.text;
+          }
+          textCell.appendChild(bulletElement);
+          const stateCell = createSafeElement("td", "", "state-cell");
+          const stateBadge = this.createStateBadge(bullet);
+          stateCell.appendChild(stateBadge);
+          const qualityCell = createSafeElement("td", "", "quality-cell");
+          const qualityBadges = this.createQualityBadges(bullet);
+          qualityCell.appendChild(qualityBadges);
+          const modifiedCell = createSafeElement(
+            "td",
+            new Date(bullet.lastModified).toLocaleDateString(),
+            "date-cell"
+          );
+          const actionsCell = createSafeElement("td", "", "actions-cell");
+          const editButton = createSafeElement("button", "Edit", "btn btn-sm");
+          const deleteButton = createSafeElement("button", "Delete", "btn btn-sm btn-danger");
+          editButton.addEventListener("click", () => this.editBullet(bullet.id));
+          deleteButton.addEventListener("click", () => this.deleteBullet(bullet.id));
+          actionsCell.appendChild(editButton);
+          actionsCell.appendChild(deleteButton);
+          row.appendChild(roleCell);
+          row.appendChild(projectCell);
+          row.appendChild(textCell);
+          row.appendChild(stateCell);
+          row.appendChild(qualityCell);
+          row.appendChild(modifiedCell);
+          row.appendChild(actionsCell);
+          return row;
+        }
+        /**
+         * Create project selection dropdown for bullet
+         */
+        async createProjectSelect(bullet) {
+          const select = document.createElement("select");
+          select.className = "project-select";
+          const currentProject = this.projects.find((p) => p.id === bullet.projectId);
+          if (currentProject) {
+            const currentOption = document.createElement("option");
+            currentOption.value = currentProject.id;
+            currentOption.textContent = currentProject.name;
+            currentOption.selected = true;
+            select.appendChild(currentOption);
+          }
+          const roleProjects = this.projects.filter(
+            (p) => p.roleId === bullet.roleId && p.id !== bullet.projectId
+          );
+          for (const project of roleProjects) {
+            const option = document.createElement("option");
+            option.value = project.id;
+            option.textContent = project.name;
+            select.appendChild(option);
+          }
+          select.addEventListener("change", async (e) => {
+            const newProjectId = e.target.value;
+            await this.moveBulletToProject(bullet.id, newProjectId);
+          });
+          return select;
+        }
+        /**
+         * Create embedding state badge
+         */
+        createStateBadge(bullet) {
+          const badge = createSafeElement(
+            "span",
+            "",
+            `state-badge state-badge--${bullet.embeddingState}`
+          );
+          const stateLabels = {
+            ready: "\u2713 Ready",
+            pending: "\u23F3 Processing",
+            stale: "\u26A0 Needs Update",
+            failed: "\u2717 Failed"
+          };
+          setSafeTextContent(badge, stateLabels[bullet.embeddingState] || "? Unknown");
+          if (bullet.embeddingState === "failed" && bullet.retryCount > 0) {
+            badge.title = `Failed after ${bullet.retryCount} retries`;
+          }
+          return badge;
+        }
+        /**
+         * Create quality feature badges
+         */
+        createQualityBadges(bullet) {
+          const container = createSafeElement("div", "", "quality-badges");
+          const features = [
+            { key: "hasNumbers", label: "#", title: "Contains numbers" },
+            { key: "actionVerb", label: "V", title: "Strong action verb" },
+            { key: "lengthOk", label: "L", title: "Good length" }
+          ];
+          for (const feature of features) {
+            const badge = createSafeElement(
+              "span",
+              feature.label,
+              `quality-badge ${bullet.features[feature.key] ? "quality-badge--active" : "quality-badge--inactive"}`
+            );
+            badge.title = feature.title;
+            container.appendChild(badge);
+          }
+          return container;
+        }
+        /**
+         * Load data from storage
+         */
+        async loadData() {
+          [this.bullets, this.projects, this.roles] = await Promise.all([
+            getAll("bullets"),
+            getAll("projects"),
+            getAll("roles")
+          ]);
+        }
+        /**
+         * Get filtered and sorted bullets
+         */
+        getFilteredAndSortedBullets() {
+          let filtered = this.bullets;
+          if (this.filterText) {
+            const filter = this.filterText.toLowerCase();
+            filtered = filtered.filter(
+              (bullet) => bullet.text.toLowerCase().includes(filter)
+            );
+          }
+          filtered.sort((a, b) => {
+            let compareValue = 0;
+            switch (this.sortBy) {
+              case "created":
+                compareValue = a.createdAt - b.createdAt;
+                break;
+              case "modified":
+                compareValue = a.lastModified - b.lastModified;
+                break;
+              case "role":
+                const roleA = this.roles.find((r) => r.id === a.roleId);
+                const roleB = this.roles.find((r) => r.id === b.roleId);
+                compareValue = (roleA?.orderIndex || 0) - (roleB?.orderIndex || 0);
+                break;
+              case "project":
+                const projectA = this.projects.find((p) => p.id === a.projectId);
+                const projectB = this.projects.find((p) => p.id === b.projectId);
+                compareValue = (projectA?.name || "").localeCompare(projectB?.name || "");
+                break;
+            }
+            return this.sortOrder === "desc" ? -compareValue : compareValue;
+          });
+          return filtered;
+        }
+        /**
+         * Move bullet to different project
+         */
+        async moveBulletToProject(bulletId, newProjectId) {
+          try {
+            const bullet = this.bullets.find((b) => b.id === bulletId);
+            if (!bullet) return;
+            const updatedBullet = {
+              ...bullet,
+              projectId: newProjectId,
+              lastModified: Date.now()
+            };
+            await update("bullets", updatedBullet);
+            await markBulletChanged(bulletId);
+            await this.render();
+          } catch (error) {
+            console.error("Failed to move bullet:", error);
+            alert("Failed to move bullet point");
+          }
+        }
+        /**
+         * Show add bullet modal
+         */
+        showAddBulletModal() {
+          const editor = getBulletEditor();
+          editor.showAddModal("role_mckinsey_sc", void 0, () => {
+            this.render();
+          });
+        }
+        editBullet(bulletId) {
+          const editor = getBulletEditor();
+          editor.showEditModal(bulletId, () => this.render());
+        }
+        /**
+         * Delete bullet
+         */
+        async deleteBullet(bulletId) {
+          if (!confirm("Are you sure you want to delete this bullet point?")) {
+            return;
+          }
+          try {
+            await deleteById("bullets", bulletId);
+            await this.render();
+          } catch (error) {
+            console.error("Failed to delete bullet:", error);
+            alert("Failed to delete bullet point");
+          }
+        }
+      };
+      ProjectsTable = class {
+        container;
+        projects = [];
+        roles = [];
+        bullets = [];
+        constructor(container) {
+          this.container = container;
+        }
+        /**
+         * Render the projects table
+         */
+        async render() {
+          await this.loadData();
+          this.container.innerHTML = "";
+          const header = this.createHeader();
+          const table = this.createTable();
+          this.container.appendChild(header);
+          this.container.appendChild(table);
+        }
+        /**
+         * Create header with add button
+         */
+        createHeader() {
+          const header = createSafeElement("div", "", "projects-header");
+          const addButton = createSafeElement("button", "+ Add Project", "btn btn-primary");
+          addButton.addEventListener("click", () => this.showAddProjectModal());
+          header.appendChild(addButton);
+          return header;
+        }
+        /**
+         * Create projects table
+         */
+        createTable() {
+          const table = createSafeElement("table", "", "projects-table data-table");
+          const thead = createSafeElement("thead");
+          const headerRow = createSafeElement("tr");
+          ["Role", "Project Name", "Description", "# Bullets", "Embedding Status", "Actions"].forEach((text) => {
+            const th = createSafeElement("th", text);
+            headerRow.appendChild(th);
+          });
+          thead.appendChild(headerRow);
+          table.appendChild(thead);
+          const tbody = createSafeElement("tbody");
+          for (const project of this.projects) {
+            const row = this.createProjectRow(project);
+            tbody.appendChild(row);
+          }
+          if (this.projects.length === 0) {
+            const emptyRow = createSafeElement("tr");
+            const emptyCell = document.createElement("td");
+            emptyCell.textContent = "No projects found";
+            emptyCell.className = "empty-state";
+            emptyCell.colSpan = 6;
+            emptyRow.appendChild(emptyCell);
+            tbody.appendChild(emptyRow);
+          }
+          table.appendChild(tbody);
+          return table;
+        }
+        /**
+         * Create project row
+         */
+        createProjectRow(project) {
+          const row = createSafeElement("tr", "", "project-row");
+          const role = this.roles.find((r) => r.id === project.roleId);
+          const roleCell = createSafeElement(
+            "td",
+            role ? `${role.title}
+${role.company}` : "Unknown Role"
+          );
+          const nameCell = createSafeElement("td", project.name, "project-name");
+          const descCell = createSafeElement(
+            "td",
+            project.description.length > 60 ? project.description.substring(0, 60) + "..." : project.description
+          );
+          if (project.description.length > 60) {
+            descCell.title = project.description;
+          }
+          const projectBullets = this.bullets.filter((b) => b.projectId === project.id);
+          const actualCount = projectBullets.length;
+          const storedCount = project.bulletCount;
+          const countCell = createSafeElement("td", "", "count-cell");
+          const countText = createSafeElement("span", actualCount.toString());
+          if (actualCount !== storedCount) {
+            countText.className = "count-mismatch";
+            countText.title = `Stored count: ${storedCount}, Actual: ${actualCount}`;
+          }
+          countCell.appendChild(countText);
+          const statusCell = createSafeElement("td", "", "status-cell");
+          const statusBadge = this.createEmbeddingStatusBadge(project, projectBullets);
+          statusCell.appendChild(statusBadge);
+          const actionsCell = createSafeElement("td", "", "actions-cell");
+          const editButton = createSafeElement("button", "Edit", "btn btn-sm");
+          const deleteButton = createSafeElement("button", "Delete", "btn btn-sm btn-danger");
+          editButton.addEventListener("click", () => this.editProject(project.id));
+          deleteButton.addEventListener("click", () => this.deleteProject(project.id));
+          actionsCell.appendChild(editButton);
+          actionsCell.appendChild(deleteButton);
+          row.appendChild(roleCell);
+          row.appendChild(nameCell);
+          row.appendChild(descCell);
+          row.appendChild(countCell);
+          row.appendChild(statusCell);
+          row.appendChild(actionsCell);
+          return row;
+        }
+        /**
+         * Create embedding status badge for project
+         */
+        createEmbeddingStatusBadge(project, bullets) {
+          const badge = createSafeElement("div", "", "embedding-status");
+          if (bullets.length === 0) {
+            badge.className += " embedding-status--empty";
+            setSafeTextContent(badge, "No bullets");
+            return badge;
+          }
+          const stateCounts = {
+            ready: 0,
+            pending: 0,
+            stale: 0,
+            failed: 0
+          };
+          bullets.forEach((bullet) => {
+            stateCounts[bullet.embeddingState]++;
+          });
+          if (stateCounts.failed > 0) {
+            badge.className += " embedding-status--failed";
+            setSafeTextContent(badge, `${stateCounts.failed} failed`);
+          } else if (stateCounts.pending > 0) {
+            badge.className += " embedding-status--pending";
+            setSafeTextContent(badge, `${stateCounts.pending} processing`);
+          } else if (stateCounts.stale > 0) {
+            badge.className += " embedding-status--stale";
+            setSafeTextContent(badge, `${stateCounts.stale} stale`);
+          } else {
+            badge.className += " embedding-status--ready";
+            setSafeTextContent(badge, "All ready");
+          }
+          const hasValidCentroid = project.centroidVector.byteLength > 0;
+          if (!hasValidCentroid) {
+            badge.className += " embedding-status--no-centroid";
+            badge.title = "Project centroid needs calculation";
+          }
+          return badge;
+        }
+        /**
+         * Load data from storage
+         */
+        async loadData() {
+          [this.projects, this.roles, this.bullets] = await Promise.all([
+            getAll("projects"),
+            getAll("roles"),
+            getAll("bullets")
+          ]);
+        }
+        /**
+         * Show add project modal
+         */
+        showAddProjectModal() {
+          const editor = getProjectEditor();
+          const firstRole = this.roles[0];
+          const defaultRoleId = firstRole ? firstRole.id : void 0;
+          editor.showAddModal(defaultRoleId, () => this.render());
+        }
+        /**
+         * Edit project
+         */
+        editProject(projectId) {
+          const editor = getProjectEditor();
+          editor.showEditModal(projectId, () => this.render());
+        }
+        /**
+         * Delete project
+         */
+        async deleteProject(projectId) {
+          const project = this.projects.find((p) => p.id === projectId);
+          if (!project) return;
+          const projectBullets = this.bullets.filter((b) => b.projectId === projectId);
+          if (projectBullets.length > 0) {
+            const confirmMessage = `This project has ${projectBullets.length} bullet points. Deleting it will move them to "No Project". Continue?`;
+            if (!confirm(confirmMessage)) {
+              return;
+            }
+          }
+          if (!confirm(`Are you sure you want to delete "${project.name}"?`)) {
+            return;
+          }
+          try {
+            await deleteById("projects", projectId);
+            await this.render();
+          } catch (error) {
+            console.error("Failed to delete project:", error);
+            alert("Failed to delete project");
+          }
+        }
+      };
     }
   });
 
@@ -761,242 +2631,62 @@ var Resuum = (() => {
   var init_experience_tab = __esm({
     "src/ui/experience-tab.ts"() {
       "use strict";
+      init_data_management();
       init_xss_safe_rendering();
-      init_bullets_table();
-      init_sample_data();
       ExperienceTab = class {
         container;
-        state = {
-          currentSubTab: "bullets",
-          lastUpdate: Date.now()
-        };
-        bulletsTable = null;
+        currentView = "bullets";
+        bulletsTable;
+        projectsTable;
         constructor(container) {
           this.container = container;
+          const tableContainer = createSafeElement("div", "", "table-container");
+          this.bulletsTable = new BulletPointsTable(tableContainer);
+          this.projectsTable = new ProjectsTable(tableContainer);
         }
-        // ============================================================================
-        // Public Interface
-        // ============================================================================
         /**
-         * Render the complete Experience tab
+         * Render the experience tab content
          */
-        render() {
+        async render() {
           this.container.innerHTML = "";
-          const tabContainer = createSafeElement("div", "", "experience-tab");
-          const header = this.createHeader();
-          tabContainer.appendChild(header);
           const subNav = this.createSubNavigation();
-          tabContainer.appendChild(subNav);
-          const content = this.createMainContent();
-          tabContainer.appendChild(content);
-          this.container.appendChild(tabContainer);
+          const content = createSafeElement("div", "", "experience-content");
+          this.container.appendChild(subNav);
+          this.container.appendChild(content);
+          if (this.currentView === "bullets") {
+            await this.bulletsTable.render();
+            content.appendChild(this.bulletsTable["container"]);
+          } else {
+            await this.projectsTable.render();
+            content.appendChild(this.projectsTable["container"]);
+          }
         }
         /**
-         * Switch to specific sub-tab
-         */
-        switchSubTab(subTab) {
-          this.state.currentSubTab = subTab;
-          this.state.lastUpdate = Date.now();
-          this.render();
-        }
-        /**
-         * Get current tab state
-         */
-        getState() {
-          return { ...this.state };
-        }
-        // ============================================================================
-        // Header and Summary
-        // ============================================================================
-        /**
-         * Create tab header with embedding state summary
-         */
-        createHeader() {
-          const header = createSafeElement("div", "", "experience-header");
-          const title = createSafeElement("h2", "Experience Management", "section-title");
-          const summary = this.createEmbeddingStateSummary();
-          header.appendChild(title);
-          header.appendChild(summary);
-          return header;
-        }
-        /**
-         * Create embedding state summary display
-         */
-        createEmbeddingStateSummary() {
-          const summaryContainer = createSafeElement("div", "", "embedding-summary");
-          const stateSummary = getEmbeddingStateSummary();
-          const summaryText = createSafeElement("p", "", "summary-text");
-          setSafeTextContent(
-            summaryText,
-            `${stateSummary.total} bullet points: ${stateSummary.ready} ready, ${stateSummary.pending} pending, ${stateSummary.stale} stale, ${stateSummary.failed} failed`
-          );
-          const badgesContainer = createSafeElement("div", "", "state-badges");
-          const stateTypes = [
-            { key: "ready", label: "Ready", count: stateSummary.ready, class: "ready" },
-            { key: "pending", label: "Pending", count: stateSummary.pending, class: "pending" },
-            { key: "stale", label: "Stale", count: stateSummary.stale, class: "stale" },
-            { key: "failed", label: "Failed", count: stateSummary.failed, class: "failed" }
-          ];
-          stateTypes.forEach((state) => {
-            const badge = createSafeElement("span", "", `summary-badge summary-badge--${state.class}`);
-            setSafeTextContent(badge, `${state.label}: ${state.count}`);
-            badgesContainer.appendChild(badge);
-          });
-          summaryContainer.appendChild(summaryText);
-          summaryContainer.appendChild(badgesContainer);
-          return summaryContainer;
-        }
-        // ============================================================================
-        // Sub-Navigation
-        // ============================================================================
-        /**
-         * Create sub-navigation for Bullets/Projects views
+         * Create sub-navigation between bullets and projects views
          */
         createSubNavigation() {
-          const nav = createSafeElement("nav", "", "experience-sub-nav");
-          const navList = createSafeElement("ul", "", "sub-nav-list");
-          const bulletsItem = this.createSubNavItem("bullets", "Bullet Points", this.state.currentSubTab === "bullets");
-          const projectsItem = this.createSubNavItem("projects", "Projects", this.state.currentSubTab === "projects");
-          navList.appendChild(bulletsItem);
-          navList.appendChild(projectsItem);
-          nav.appendChild(navList);
+          const nav = createSafeElement("nav", "", "experience-subnav");
+          const bulletsButton = createSafeElement(
+            "button",
+            "Bullet Points",
+            `subnav-button ${this.currentView === "bullets" ? "subnav-button--active" : ""}`
+          );
+          const projectsButton = createSafeElement(
+            "button",
+            "Projects",
+            `subnav-button ${this.currentView === "projects" ? "subnav-button--active" : ""}`
+          );
+          bulletsButton.addEventListener("click", async () => {
+            this.currentView = "bullets";
+            await this.render();
+          });
+          projectsButton.addEventListener("click", async () => {
+            this.currentView = "projects";
+            await this.render();
+          });
+          nav.appendChild(bulletsButton);
+          nav.appendChild(projectsButton);
           return nav;
-        }
-        /**
-         * Create individual sub-navigation item
-         */
-        createSubNavItem(view, label, isActive) {
-          const listItem = createSafeElement("li", "", "sub-nav-item");
-          const button = document.createElement("button");
-          button.className = `sub-nav-button ${isActive ? "sub-nav-button--active" : ""}`;
-          setSafeTextContent(button, label);
-          button.addEventListener("click", () => {
-            this.switchSubTab(view);
-          });
-          listItem.appendChild(button);
-          return listItem;
-        }
-        // ============================================================================
-        // Main Content
-        // ============================================================================
-        /**
-         * Create main content area
-         */
-        createMainContent() {
-          const content = createSafeElement("div", "", "experience-content");
-          if (this.state.currentSubTab === "bullets") {
-            const tableContainer = this.createBulletsView();
-            content.appendChild(tableContainer);
-          } else {
-            const projectsView = this.createProjectsView();
-            content.appendChild(projectsView);
-          }
-          return content;
-        }
-        /**
-         * Create bullets table view
-         */
-        createBulletsView() {
-          const container = createSafeElement("div", "", "bullets-view");
-          const { bullets, roles, projects } = getSampleDataset();
-          this.bulletsTable = new BulletsTable(container);
-          container.addEventListener("sort-change", (event) => {
-            const customEvent = event;
-            console.log("Sort changed:", customEvent.detail);
-          });
-          this.bulletsTable.render(bullets, roles, projects);
-          return container;
-        }
-        /**
-         * Create projects overview view
-         */
-        createProjectsView() {
-          const container = createSafeElement("div", "", "projects-view");
-          const table = this.createProjectsTable();
-          container.appendChild(table);
-          return container;
-        }
-        // ============================================================================
-        // Projects Table
-        // ============================================================================
-        /**
-         * Create projects overview table
-         */
-        createProjectsTable() {
-          const tableContainer = createSafeElement("div", "", "table-container");
-          const table = createSafeElement("table", "", "projects-table");
-          const thead = this.createProjectsTableHeader();
-          const tbody = this.createProjectsTableBody();
-          table.appendChild(thead);
-          table.appendChild(tbody);
-          tableContainer.appendChild(table);
-          return tableContainer;
-        }
-        /**
-         * Create projects table header
-         */
-        createProjectsTableHeader() {
-          const thead = createSafeElement("thead", "", "table-header");
-          const headerRow = createSafeElement("tr", "", "header-row");
-          const headers = [
-            { text: "Role", class: "role-header" },
-            { text: "Project Name", class: "project-header" },
-            { text: "# Bullets", class: "count-header" },
-            { text: "Description", class: "description-header" }
-          ];
-          headers.forEach((header) => {
-            const th = createSafeElement("th", header.text, header.class);
-            headerRow.appendChild(th);
-          });
-          thead.appendChild(headerRow);
-          return thead;
-        }
-        /**
-         * Create projects table body with deterministic ordering
-         */
-        createProjectsTableBody() {
-          const tbody = createSafeElement("tbody", "", "table-body");
-          const { roles, projects } = getSampleDataset();
-          const sortedProjects = projects.slice().sort((a, b) => {
-            const roleA = roles.find((r) => r.id === a.roleId);
-            const roleB = roles.find((r) => r.id === b.roleId);
-            if (roleA && roleB) {
-              if (roleA.orderIndex !== roleB.orderIndex) {
-                return roleA.orderIndex - roleB.orderIndex;
-              }
-            }
-            return a.name.localeCompare(b.name);
-          });
-          sortedProjects.forEach((project) => {
-            const role = roles.find((r) => r.id === project.roleId);
-            if (role) {
-              const row = this.createProjectRow(project, role);
-              tbody.appendChild(row);
-            }
-          });
-          return tbody;
-        }
-        /**
-         * Create individual project row
-         */
-        createProjectRow(project, role) {
-          const row = createSafeElement("tr", "", "project-row");
-          const roleCell = createSafeElement("td", "", "role-cell");
-          setSafeTextContent(roleCell, `${role.title} - ${role.company}`);
-          const nameCell = createSafeElement("td", "", "name-cell");
-          setSafeTextContent(nameCell, project.name);
-          const countCell = createSafeElement("td", "", "count-cell");
-          setSafeTextContent(countCell, project.bulletCount.toString());
-          const descCell = createSafeElement("td", "", "description-cell");
-          const description = project.description || "No description";
-          const truncatedDesc = description.length > 60 ? description.substring(0, 60) + "..." : description;
-          setSafeTextContent(descCell, truncatedDesc);
-          descCell.title = description;
-          row.appendChild(roleCell);
-          row.appendChild(nameCell);
-          row.appendChild(countCell);
-          row.appendChild(descCell);
-          return row;
         }
       };
     }
@@ -1075,17 +2765,6 @@ var Resuum = (() => {
       this.container.appendChild(status);
       this.tabContent = content;
       this.statusBar = status;
-    }
-    /**
-     * Create application header
-     */
-    createHeader() {
-      const header = createSafeElement("header", "", "app-header");
-      const title = createSafeElement("h1", "Resuum", "app-title");
-      const subtitle = createSafeElement("p", "AI-Powered Resume Optimization", "app-subtitle");
-      header.appendChild(title);
-      header.appendChild(subtitle);
-      return header;
     }
     /**
      * Create tab navigation

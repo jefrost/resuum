@@ -133,21 +133,6 @@ import {
     }
     
     /**
-     * Create application header
-     */
-    private createHeader(): HTMLElement {
-      const header = createSafeElement('header', '', 'app-header');
-      
-      const title = createSafeElement('h1', 'Resuum', 'app-title');
-      const subtitle = createSafeElement('p', 'AI-Powered Resume Optimization', 'app-subtitle');
-      
-      header.appendChild(title);
-      header.appendChild(subtitle);
-      
-      return header;
-    }
-    
-    /**
      * Create tab navigation
      */
     private createTabNavigation(): HTMLElement {

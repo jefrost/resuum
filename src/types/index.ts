@@ -112,7 +112,7 @@ export interface DatabaseSchema {
 }
 
 // ============================================================================
-// API and Processing Types
+// OpenAI API Types
 // ============================================================================
 
 export interface OpenAIEmbeddingResponse {
@@ -129,47 +129,75 @@ export interface OpenAIEmbeddingResponse {
   };
 }
 
+export interface APIError {
+  error: {
+    message: string;
+    type: string;
+    param?: string;
+    code?: string;
+  };
+}
+
+// ============================================================================
+// Processing and Service Types
+// ============================================================================
+
+export interface EmbeddingProcessorStats {
+  isProcessing: boolean;
+  processed: number;
+  failed: number;
+  queueSize: number;
+  uptime: number;
+}
+
+export interface OpenAIServiceConfig {
+  model?: string;
+  dimensions?: number;
+  skipCache?: boolean;
+}
+
+export interface BatchEmbeddingOptions extends OpenAIServiceConfig {
+  onProgress?: (completed: number, total: number) => void;
+}
+
+// ============================================================================
+// Job Analysis and Recommendation Types
+// ============================================================================
+
 export interface JobAnalysis {
   title: string;
   description: string;
   embedding?: Float32Array;
   skills?: string[];
-  functionBias?: FunctionBias;
-}
-
-export type FunctionBias = 'general' | 'technical' | 'business_strategy' | 'marketing' | 'operations';
-
-export interface AlgorithmWeights {
-  relevance: number;        // α - relevance to job description
-  quality: number;          // μ - quality features score
-  recency: number;          // ρ - recency bias
-  redundancyPenalty: number; // λ - redundancy penalty
+  requirements?: string[];
+  functionBias?: string;
 }
 
 export interface ProjectScore {
-  project: Project;
+  projectId: string;
   score: number;
-  similarity: number;
-  recencyFactor: number;
+  relevanceScore: number;
+  qualityScore: number;
+  recencyScore: number;
 }
 
 export interface BulletScore {
-  bullet: Bullet;
+  bulletId: string;
   score: number;
-  relevance: number;
+  relevanceScore: number;
   qualityScore: number;
-  redundancyScore: number;
+  redundancyPenalty: number;
 }
 
 export interface RoleResult {
-  role: Role;
-  projectsConsidered: Project[];
-  projectsShortlisted: Project[];
+  roleId: string;
+  roleTitle: string;
   selectedBullets: BulletScore[];
+  projectsConsidered: string[];
   avgRelevance: number;
 }
 
-export interface GenerationResult {
+export interface RecommendationResult {
   jobTitle: string;
   totalBullets: number;
   processingTime: number;
@@ -185,7 +213,44 @@ export interface GenerationResult {
 }
 
 // ============================================================================
-// Worker Communication Types
+// UI State and Navigation Types
+// ============================================================================
+
+export type TabId = 'new_application' | 'experience' | 'settings';
+
+export interface TabConfig {
+  id: TabId;
+  label: string;
+  icon?: string;
+}
+
+export interface AppState {
+  currentTab: TabId;
+  isLoading: boolean;
+  error: string | null;
+  lastJobDescription?: string;
+  lastResult?: RecommendationResult;
+}
+
+// ============================================================================
+// Function Bias and Algorithm Configuration
+// ============================================================================
+
+export type FunctionBias = 'general' | 'technical' | 'business_strategy' | 'marketing' | 'operations';
+
+export interface AlgorithmWeights {
+  relevance: number; // α - relevance to job description
+  quality: number; // μ - quality features weight
+  recency: number; // ρ - recency bias
+  redundancy: number; // λ - redundancy penalty
+}
+
+export interface FunctionBiasConfig {
+  [key: string]: AlgorithmWeights;
+}
+
+// ============================================================================
+// Vector Operations and Worker Types
 // ============================================================================
 
 export interface WorkerMessage {
@@ -200,56 +265,21 @@ export interface WorkerResponse {
   success: boolean;
   data?: any;
   error?: string;
+  processingTime: number;
 }
 
-export interface VectorOperation {
-  jobVector: Float32Array;
-  bulletVectors: Float32Array[];
+export interface VectorOperationData {
+  operation: 'cosine_similarity' | 'batch_similarity' | 'mmr_selection';
+  vectors: Float32Array[];
+  targetVector?: Float32Array;
   selectedVectors?: Float32Array[];
-  weights?: AlgorithmWeights;
+  threshold?: number;
+  limit?: number;
 }
 
-export interface VectorResult {
-  similarities: number[];
-  redundancyScores: number[];
-  qualityScores: number[];
-}
-
-// ============================================================================
-// UI State Types
-// ============================================================================
-
-export interface AppState {
-  currentTab: 'application' | 'experience' | 'settings';
-  loading: boolean;
-  error?: string;
-}
-
-export interface ExperienceTabState {
-  currentSubTab: 'bullets' | 'projects';
-  selectedBullets: string[];
-  sortBy: 'role' | 'project' | 'created' | 'modified';
-  sortOrder: 'asc' | 'desc';
-  filterText: string;
-  filterRole?: string;
-  filterProject?: string;
-}
-
-export interface ApplicationTabState {
-  jobTitle: string;
-  jobDescription: string;
-  functionBias: FunctionBias;
-  processing: boolean;
-  lastResult?: GenerationResult;
-  showAnalysis: boolean;
-}
-
-export interface SettingsTabState {
-  apiKeySet: boolean;
-  storageUsage?: {
-    totalSize: number;
-    bulletCount: number;
-    projectCount: number;
-    embeddingCount: number;
-  };
+export interface VectorPerformanceMetrics {
+  operationsCount: number;
+  totalTimeMs: number;
+  averageTimeMs: number;
+  lastOperationTime: number;
 }
