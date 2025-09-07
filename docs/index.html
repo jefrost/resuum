@@ -1456,12 +1456,9 @@ var Resuum = (() => {
             newProjectInputs.classList.remove("hidden");
           }
           roleSelect.addEventListener("change", () => {
-            console.log("Role changed to:", roleSelect.value);
             if (roleSelect.value === "new_role") {
-              newRoleInputs.classList.remove("hidden");
-              this.updateProjectOptions(projectSelect, void 0);
+              this.updateProjectOptions(projectSelect, "new_role");
             } else {
-              newRoleInputs.classList.add("hidden");
               this.updateProjectOptions(projectSelect, roleSelect.value);
             }
           });
@@ -1504,7 +1501,7 @@ var Resuum = (() => {
             const selectedRole = roleSelect.value;
             if (selectedRole === "new_role") {
               newRoleInputs.classList.remove("hidden");
-              this.updateProjectOptions(projectSelect, void 0);
+              this.updateProjectOptions(projectSelect, "new_role");
             } else {
               newRoleInputs.classList.add("hidden");
               this.updateProjectOptions(projectSelect, selectedRole);
@@ -1513,11 +1510,18 @@ var Resuum = (() => {
         }
         updateProjectOptions(select, roleId, selectedId) {
           select.innerHTML = "";
-          if (!roleId || roleId === "new_role") {
+          if (!roleId || roleId !== "new_role" && roleId === void 0) {
             const option = document.createElement("option");
             option.textContent = "Select a role first";
             option.disabled = true;
             select.appendChild(option);
+            return;
+          }
+          if (roleId === "new_role") {
+            const newOption2 = document.createElement("option");
+            newOption2.value = "new_project";
+            newOption2.textContent = "+ New Project";
+            select.appendChild(newOption2);
             return;
           }
           const noProjectOption = document.createElement("option");
@@ -1870,17 +1874,41 @@ var Resuum = (() => {
         /**
          * Create form
          */
+        // Replace the createForm method with this simpler version:
         createForm(config) {
-          const form = createSafeElement("form", "", "project-form");
+          const form = document.createElement("form");
+          form.className = "project-form";
           const roleGroup = this.createRoleSelection(config.defaultRoleId);
-          const nameGroup = this.createNameInput(config.project?.name || "");
-          const descGroup = this.createDescriptionInput(config.project?.description || "");
+          const nameGroup = document.createElement("div");
+          nameGroup.className = "form-group";
+          const nameLabel = document.createElement("label");
+          nameLabel.textContent = "Project Name";
+          nameLabel.className = "form-label";
+          const nameInput = document.createElement("input");
+          nameInput.id = "project-name";
+          nameInput.type = "text";
+          nameInput.className = "form-input";
+          nameInput.placeholder = "Enter project name...";
+          nameInput.value = config.project?.name || "";
+          nameGroup.append(nameLabel, nameInput);
+          const descGroup = document.createElement("div");
+          descGroup.className = "form-group";
+          const descLabel = document.createElement("label");
+          descLabel.textContent = "Description";
+          descLabel.className = "form-label";
+          const descInput = document.createElement("textarea");
+          descInput.id = "project-description";
+          descInput.className = "form-textarea";
+          descInput.placeholder = "Enter description...";
+          descInput.rows = 3;
+          descInput.value = config.project?.description || "";
+          descGroup.append(descLabel, descInput);
           const buttonGroup = this.createButtons(config.project !== null);
           form.append(roleGroup, nameGroup, descGroup, buttonGroup);
-          form.onsubmit = async (e) => {
+          form.addEventListener("submit", async (e) => {
             e.preventDefault();
             await this.handleSubmit();
-          };
+          });
           return form;
         }
         /**
@@ -1914,7 +1942,7 @@ var Resuum = (() => {
           input.className = "form-input";
           input.placeholder = "Enter project name...";
           input.value = defaultName;
-          input.required = true;
+          input.disabled = false;
           group.append(label, input);
           return group;
         }
@@ -1931,10 +1959,8 @@ var Resuum = (() => {
           textarea.placeholder = "Enter project description (optional)...";
           textarea.rows = 3;
           textarea.value = defaultDescription;
+          textarea.disabled = false;
           this.updateCharCounter(defaultDescription, counter);
-          textarea.addEventListener("input", () => {
-            this.updateCharCounter(textarea.value, counter);
-          });
           group.append(label, textarea, counter);
           return group;
         }
@@ -1961,9 +1987,18 @@ var Resuum = (() => {
         showModalElement() {
           const mainContent = document.querySelector(".main-content") || document.body;
           mainContent.appendChild(this.modal);
-          this.modal.onclick = (e) => e.target === this.modal && this.hideModal();
-          document.onkeydown = (e) => e.key === "Escape" && this.hideModal();
+          const escapeHandler = (e) => {
+            if (e.key === "Escape") {
+              this.hideModal();
+            }
+          };
+          document.addEventListener("keydown", escapeHandler);
           setTimeout(() => {
+            const allInputs = this.modal.querySelectorAll("input, textarea");
+            allInputs.forEach((input) => {
+              input.disabled = false;
+              input.readOnly = false;
+            });
             const nameInput = this.modal.querySelector("#project-name");
             nameInput?.focus();
           }, 100);
@@ -2456,11 +2491,20 @@ ${role.company}` : "Unknown Role",
          * Create projects table
          */
         createTable() {
-          const table = createSafeElement("table", "", "projects-table data-table");
+          const table = createSafeElement("table", "", "bullets-table data-table");
           const thead = createSafeElement("thead");
           const headerRow = createSafeElement("tr");
           ["Role", "Project Name", "Description", "# Bullets", "Embedding Status", "Actions"].forEach((text) => {
             const th = createSafeElement("th", text);
+            if (text === "Description") {
+              th.style.width = "40%";
+            } else if (text === "Role") {
+              th.style.width = "20%";
+            } else if (text === "Project Name") {
+              th.style.width = "15%";
+            } else {
+              th.style.width = "8%";
+            }
             headerRow.appendChild(th);
           });
           thead.appendChild(headerRow);

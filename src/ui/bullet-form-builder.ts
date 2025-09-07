@@ -182,16 +182,14 @@ export class BulletFormBuilder {
   
     // Fix role change handler (remove unused parameter)
     roleSelect.addEventListener('change', () => {
-      console.log('Role changed to:', roleSelect.value);
-      
-      if (roleSelect.value === 'new_role') {
-        newRoleInputs.classList.remove('hidden');
-        this.updateProjectOptions(projectSelect, undefined);
-      } else {
-        newRoleInputs.classList.add('hidden');
-        this.updateProjectOptions(projectSelect, roleSelect.value);
-      }
-    });
+        
+        if (roleSelect.value === 'new_role') {
+          // Fix: Pass 'new_role' instead of undefined
+          this.updateProjectOptions(projectSelect, 'new_role');
+        } else {
+          this.updateProjectOptions(projectSelect, roleSelect.value);
+        }
+      });
   
     // Test if text input works
     textInput.addEventListener('input', () => {
@@ -240,7 +238,7 @@ export class BulletFormBuilder {
         
         if (selectedRole === 'new_role') {
         newRoleInputs.classList.remove('hidden');
-        this.updateProjectOptions(projectSelect, undefined);
+        this.updateProjectOptions(projectSelect, 'new_role');
         } else {
         newRoleInputs.classList.add('hidden');
         this.updateProjectOptions(projectSelect, selectedRole);
@@ -251,11 +249,21 @@ export class BulletFormBuilder {
   private updateProjectOptions(select: HTMLSelectElement, roleId?: string, selectedId?: string): void {
     select.innerHTML = '';
     
-    if (!roleId || roleId === 'new_role') {
+    // Fix: Allow new project when new role is selected
+    if (!roleId || (roleId !== 'new_role' && roleId === undefined)) {
       const option = document.createElement('option');
       option.textContent = 'Select a role first';
       option.disabled = true;
       select.appendChild(option);
+      return;
+    }
+    
+    // For new roles, just show new project option
+    if (roleId === 'new_role') {
+      const newOption = document.createElement('option');
+      newOption.value = 'new_project';
+      newOption.textContent = '+ New Project';
+      select.appendChild(newOption);
       return;
     }
     

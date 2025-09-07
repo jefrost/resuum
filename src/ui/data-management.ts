@@ -454,16 +454,28 @@ export class ProjectsTable {
    * Create projects table
    */
   private createTable(): HTMLElement {
-    const table = createSafeElement('table', '', 'projects-table data-table');
+    const table = createSafeElement('table', '', 'bullets-table data-table');
     
     // Header
     const thead = createSafeElement('thead');
     const headerRow = createSafeElement('tr');
     
-    ['Role', 'Project Name', 'Description', '# Bullets', 'Embedding Status', 'Actions'].forEach(text => {
-      const th = createSafeElement('th', text);
-      headerRow.appendChild(th);
-    });
+    ['Role', 'Project Name', 'Description', '# Bullets', 'Embedding Status', 'Actions'].forEach((text) => {
+        const th = createSafeElement('th', text);
+        
+        // Set column widths
+        if (text === 'Description') {
+          th.style.width = '40%'; // Make description widest
+        } else if (text === 'Role') {
+          th.style.width = '20%';
+        } else if (text === 'Project Name') {
+          th.style.width = '15%';
+        } else {
+          th.style.width = '8%'; // Smaller columns for bullets, status, actions
+        }
+        
+        headerRow.appendChild(th);
+      });
     
     thead.appendChild(headerRow);
     table.appendChild(thead);

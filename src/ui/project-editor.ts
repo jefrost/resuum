@@ -98,32 +98,52 @@ export class ProjectEditor {
   /**
    * Create form
    */
-  private createForm(config: {
-    title: string;
-    project: Project | null;
-    defaultRoleId?: string;
-  }): HTMLElement {
-    const form = createSafeElement('form', '', 'project-form');
+  // Replace the createForm method with this simpler version:
+private createForm(config: any): HTMLElement {
+    const form = document.createElement('form'); // Use createElement instead of createSafeElement
+    form.className = 'project-form';
     
     // Role selection
     const roleGroup = this.createRoleSelection(config.defaultRoleId);
     
-    // Project name
-    const nameGroup = this.createNameInput(config.project?.name || '');
+    // Project name - use simple HTML creation
+    const nameGroup = document.createElement('div');
+    nameGroup.className = 'form-group';
+    const nameLabel = document.createElement('label');
+    nameLabel.textContent = 'Project Name';
+    nameLabel.className = 'form-label';
+    const nameInput = document.createElement('input');
+    nameInput.id = 'project-name';
+    nameInput.type = 'text';
+    nameInput.className = 'form-input';
+    nameInput.placeholder = 'Enter project name...';
+    nameInput.value = config.project?.name || '';
+    nameGroup.append(nameLabel, nameInput);
     
-    // Project description
-    const descGroup = this.createDescriptionInput(config.project?.description || '');
+    // Description - use simple HTML creation
+    const descGroup = document.createElement('div');
+    descGroup.className = 'form-group';
+    const descLabel = document.createElement('label');
+    descLabel.textContent = 'Description';
+    descLabel.className = 'form-label';
+    const descInput = document.createElement('textarea');
+    descInput.id = 'project-description';
+    descInput.className = 'form-textarea';
+    descInput.placeholder = 'Enter description...';
+    descInput.rows = 3;
+    descInput.value = config.project?.description || '';
+    descGroup.append(descLabel, descInput);
     
     // Buttons
     const buttonGroup = this.createButtons(config.project !== null);
     
     form.append(roleGroup, nameGroup, descGroup, buttonGroup);
     
-    // Set up form submission
-    form.onsubmit = async (e) => {
+    // Set up form submission the same way as bullet editor
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
       await this.handleSubmit();
-    };
+    });
     
     return form;
   }
@@ -158,14 +178,14 @@ export class ProjectEditor {
   private createNameInput(defaultName: string): HTMLElement {
     const group = createSafeElement('div', '', 'form-group');
     const label = createSafeElement('label', 'Project Name', 'form-label');
-    const input = document.createElement('input');
+    const input = document.createElement('input'); // Use createElement like bullet editor
     
     input.id = 'project-name';
     input.type = 'text';
     input.className = 'form-input';
     input.placeholder = 'Enter project name...';
     input.value = defaultName;
-    input.required = true;
+    input.disabled = false; // Add this line
     
     group.append(label, input);
     return group;
@@ -177,7 +197,7 @@ export class ProjectEditor {
   private createDescriptionInput(defaultDescription: string): HTMLElement {
     const group = createSafeElement('div', '', 'form-group');
     const label = createSafeElement('label', 'Description', 'form-label');
-    const textarea = document.createElement('textarea');
+    const textarea = document.createElement('textarea'); // Use createElement
     const counter = createSafeElement('div', '', 'char-counter');
     
     textarea.id = 'project-description';
@@ -185,13 +205,9 @@ export class ProjectEditor {
     textarea.placeholder = 'Enter project description (optional)...';
     textarea.rows = 3;
     textarea.value = defaultDescription;
+    textarea.disabled = false; // Add this line
     
-    // Character counter
     this.updateCharCounter(defaultDescription, counter);
-    
-    textarea.addEventListener('input', () => {
-      this.updateCharCounter(textarea.value, counter);
-    });
     
     group.append(label, textarea, counter);
     return group;
@@ -225,15 +241,18 @@ export class ProjectEditor {
     const mainContent = document.querySelector('.main-content') || document.body;
     mainContent.appendChild(this.modal!);
     
-    // Set up events
-    this.modal!.onclick = (e) => e.target === this.modal && this.hideModal();
-    document.onkeydown = (e) => e.key === 'Escape' && this.hideModal();
-    
-    // Focus first input with delay (same fix as bullet editor)
+    // Debug: Check if inputs are accessible
     setTimeout(() => {
-      const nameInput = this.modal!.querySelector('#project-name') as HTMLInputElement;
-      nameInput?.focus();
-    }, 100);
+        // Force enable all inputs
+        const allInputs = this.modal!.querySelectorAll('input, textarea');
+        allInputs.forEach((input: any) => {
+          input.disabled = false;
+          input.readOnly = false;
+        });
+        
+        const nameInput = this.modal!.querySelector('#project-name') as HTMLInputElement;
+        nameInput?.focus();
+      }, 100);
   }
 
   /**
