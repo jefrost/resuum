@@ -98,15 +98,14 @@ export class ProjectEditor {
   /**
    * Create form
    */
-  // Replace the createForm method with this simpler version:
-private createForm(config: any): HTMLElement {
-    const form = document.createElement('form'); // Use createElement instead of createSafeElement
+  private createForm(config: any): HTMLElement {
+    const form = document.createElement('form');
     form.className = 'project-form';
     
     // Role selection
     const roleGroup = this.createRoleSelection(config.defaultRoleId);
     
-    // Project name - use simple HTML creation
+    // Project name
     const nameGroup = document.createElement('div');
     nameGroup.className = 'form-group';
     const nameLabel = document.createElement('label');
@@ -120,7 +119,7 @@ private createForm(config: any): HTMLElement {
     nameInput.value = config.project?.name || '';
     nameGroup.append(nameLabel, nameInput);
     
-    // Description - use simple HTML creation
+    // Description
     const descGroup = document.createElement('div');
     descGroup.className = 'form-group';
     const descLabel = document.createElement('label');
@@ -139,7 +138,7 @@ private createForm(config: any): HTMLElement {
     
     form.append(roleGroup, nameGroup, descGroup, buttonGroup);
     
-    // Set up form submission the same way as bullet editor
+    // Set up form submission
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       await this.handleSubmit();
@@ -173,47 +172,6 @@ private createForm(config: any): HTMLElement {
   }
 
   /**
-   * Create name input
-   */
-  private createNameInput(defaultName: string): HTMLElement {
-    const group = createSafeElement('div', '', 'form-group');
-    const label = createSafeElement('label', 'Project Name', 'form-label');
-    const input = document.createElement('input'); // Use createElement like bullet editor
-    
-    input.id = 'project-name';
-    input.type = 'text';
-    input.className = 'form-input';
-    input.placeholder = 'Enter project name...';
-    input.value = defaultName;
-    input.disabled = false; // Add this line
-    
-    group.append(label, input);
-    return group;
-  }
-
-  /**
-   * Create description input
-   */
-  private createDescriptionInput(defaultDescription: string): HTMLElement {
-    const group = createSafeElement('div', '', 'form-group');
-    const label = createSafeElement('label', 'Description', 'form-label');
-    const textarea = document.createElement('textarea'); // Use createElement
-    const counter = createSafeElement('div', '', 'char-counter');
-    
-    textarea.id = 'project-description';
-    textarea.className = 'form-textarea';
-    textarea.placeholder = 'Enter project description (optional)...';
-    textarea.rows = 3;
-    textarea.value = defaultDescription;
-    textarea.disabled = false; // Add this line
-    
-    this.updateCharCounter(defaultDescription, counter);
-    
-    group.append(label, textarea, counter);
-    return group;
-  }
-
-  /**
    * Create form buttons
    */
   private createButtons(isEdit: boolean): HTMLElement {
@@ -241,18 +199,17 @@ private createForm(config: any): HTMLElement {
     const mainContent = document.querySelector('.main-content') || document.body;
     mainContent.appendChild(this.modal!);
     
-    // Debug: Check if inputs are accessible
+    // Enable all inputs and focus name input
     setTimeout(() => {
-        // Force enable all inputs
-        const allInputs = this.modal!.querySelectorAll('input, textarea');
-        allInputs.forEach((input: any) => {
-          input.disabled = false;
-          input.readOnly = false;
-        });
-        
-        const nameInput = this.modal!.querySelector('#project-name') as HTMLInputElement;
-        nameInput?.focus();
-      }, 100);
+      const allInputs = this.modal!.querySelectorAll('input, textarea');
+      allInputs.forEach((input: any) => {
+        input.disabled = false;
+        input.readOnly = false;
+      });
+      
+      const nameInput = this.modal!.querySelector('#project-name') as HTMLInputElement;
+      nameInput?.focus();
+    }, 100);
   }
 
   /**
@@ -331,7 +288,7 @@ private createForm(config: any): HTMLElement {
   }
 
   /**
-   * Create new project
+   * Create new project (FIXED - removed embedding fields)
    */
   private async createProject(formData: any): Promise<void> {
     const project: Project = {
@@ -339,10 +296,7 @@ private createForm(config: any): HTMLElement {
       roleId: formData.roleId,
       name: formData.name,
       description: formData.description,
-      centroidVector: new ArrayBuffer(0),
-      vectorDimensions: 0,
       bulletCount: 0,
-      embeddingVersion: 1,
       createdAt: Date.now(),
       updatedAt: Date.now()
     };
@@ -368,24 +322,6 @@ private createForm(config: any): HTMLElement {
     };
     
     await update('projects', updatedProject);
-  }
-
-  /**
-   * Update character counter
-   */
-  private updateCharCounter(text: string, counter: HTMLElement): void {
-    const length = text.length;
-    const maxLength = 500;
-    
-    setSafeTextContent(counter, `${length}/${maxLength} characters`);
-    
-    if (length > maxLength * 0.9) {
-      counter.className = 'char-counter char-counter--warning';
-    } else if (length > maxLength) {
-      counter.className = 'char-counter char-counter--error';
-    } else {
-      counter.className = 'char-counter';
-    }
   }
 
   /**

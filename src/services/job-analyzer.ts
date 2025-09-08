@@ -1,5 +1,6 @@
 /**
- * Job description analysis service
+ * AI-Powered Job Analysis Service
+ * Extracts skills, requirements, and context from job descriptions
  */
 
 import { getOpenAIService } from './openai-service';
@@ -16,7 +17,7 @@ interface CachedAnalysis {
 }
 
 let analysisCache: CachedAnalysis | null = null;
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const CACHE_DURATION = 10 * 60 * 1000; // 10 minutes
 
 // ============================================================================
 // Job Analyzer Class
@@ -24,18 +25,15 @@ const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
 export class JobAnalyzer {
   /**
-   * Analyze job description and generate embedding
+   * Analyze job description using AI to extract skills and requirements
    */
   async analyzeJob(
     title: string,
-    description: string,
-    options: {
-      enableDeepAnalysis?: boolean;
-      functionBias?: string;
-    } = {}
+    description: string
   ): Promise<JobAnalysis> {
     // Check cache first
-    const cached = this.getCachedAnalysis(description);
+    const cacheKey = `${title}|${description}`;
+    const cached = this.getCachedAnalysis(cacheKey);
     if (cached) {
       return cached;
     }
@@ -51,27 +49,10 @@ export class JobAnalyzer {
     }
     
     try {
-      // Generate embedding for job description
-      const combinedText = `${title}\n\n${description}`;
-      const embedding = await openaiService.generateEmbedding(combinedText);
-      
-      // Create basic analysis
-      const analysis: JobAnalysis = {
-        title: title.trim(),
-        description: description.trim(),
-        embedding,
-        ...(options.functionBias && { functionBias: options.functionBias })
-      };
-      
-      // Add deep analysis if enabled
-      if (options.enableDeepAnalysis) {
-        const deepAnalysis = await this.performDeepAnalysis(title, description);
-        analysis.skills = deepAnalysis.skills;
-        analysis.requirements = deepAnalysis.requirements;
-      }
+      const analysis = await this.performAIAnalysis(title, description);
       
       // Cache the result
-      this.cacheAnalysis(description, analysis);
+      this.cacheAnalysis(cacheKey, analysis);
       
       return analysis;
       
@@ -79,140 +60,137 @@ export class JobAnalyzer {
       throw new Error(`Job analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
-  
+
   /**
-   * Perform deep analysis of job description (optional)
+   * Perform AI-powered analysis of job description
    */
-  private async performDeepAnalysis(title: string, description: string): Promise<{
-    skills: string[];
-    requirements: string[];
-  }> {
-    // For MVP, use simple keyword extraction
-    // In future versions, this could use GPT for more sophisticated analysis
+  private async performAIAnalysis(title: string, description: string): Promise<JobAnalysis> {
+    const openaiService = getOpenAIService();
     
-    const skills = this.extractSkills(description);
-    const requirements = this.extractRequirements(description);
-    
-    return { skills, requirements };
-  }
-  
-  /**
-   * Extract skills from job description using keyword matching
-   */
-  private extractSkills(description: string): string[] {
-    const skillKeywords = [
-      // Technical skills
-      'python', 'javascript', 'react', 'sql', 'aws', 'kubernetes', 'docker',
-      'machine learning', 'data analysis', 'statistics', 'modeling',
-      
-      // Business skills
-      'strategy', 'consulting', 'project management', 'leadership', 'communication',
-      'analysis', 'operations', 'marketing', 'sales', 'finance',
-      
-      // Soft skills
-      'collaboration', 'problem solving', 'critical thinking', 'presentation',
-      'negotiation', 'mentoring', 'training'
-    ];
-    
-    const text = description.toLowerCase();
-    const foundSkills: string[] = [];
-    
-    for (const skill of skillKeywords) {
-      if (text.includes(skill.toLowerCase())) {
-        foundSkills.push(skill);
+    const prompt = `Analyze this job posting and extract structured information:
+
+JOB TITLE: ${title}
+
+JOB DESCRIPTION:
+${description}
+
+Please analyze this job posting and return a JSON response with the following structure:
+{
+  "extractedSkills": ["skill1", "skill2", ...], // 8-12 key skills mentioned or implied
+  "keyRequirements": ["requirement1", "requirement2", ...], // 5-8 essential requirements
+  "roleLevel": "entry|mid|senior|executive", // Based on title and requirements
+  "functionType": "string", // Primary function (e.g., "Product Management", "Strategy", "Engineering")
+  "companyContext": "string" // Brief description of company/industry context if mentioned
+}
+
+Focus on:
+- Technical and soft skills that would be valuable
+- Experience requirements and qualifications
+- Responsibilities that indicate required capabilities
+- Leadership, analytical, communication, and domain-specific skills
+- Consider the role title context when interpreting requirements
+
+Return only valid JSON, no other text.`;
+
+    try {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${openaiService['apiKey']}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'gpt-3.5-turbo',
+          messages: [
+            {
+              role: 'user',
+              content: prompt
+            }
+          ],
+          temperature: 0.1, // Low temperature for consistent extraction
+          max_tokens: 800
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
       }
+
+      const data = await response.json();
+      const content = data.choices[0]?.message?.content;
+      
+      if (!content) {
+        throw new Error('No analysis content received from OpenAI');
+      }
+
+      // Parse JSON response
+      const analysisData = JSON.parse(content);
+      
+      // Construct full analysis object
+      const analysis: JobAnalysis = {
+        title: title.trim(),
+        description: description.trim(),
+        extractedSkills: analysisData.extractedSkills || [],
+        keyRequirements: analysisData.keyRequirements || [],
+        roleLevel: analysisData.roleLevel || 'mid',
+        functionType: analysisData.functionType || 'General',
+        companyContext: analysisData.companyContext || undefined
+      };
+
+      return analysis;
+      
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new Error('Failed to parse AI analysis response');
+      }
+      throw error;
     }
-    
-    return foundSkills.slice(0, 10); // Limit to top 10
   }
-  
-  /**
-   * Extract requirements from job description
-   */
-  private extractRequirements(description: string): string[] {
-    const requirements: string[] = [];
-    
-    // Look for degree requirements
-    if (/bachelor|ba\b|bs\b/i.test(description)) {
-      requirements.push("Bachelor's degree");
-    }
-    if (/master|mba|ms\b/i.test(description)) {
-      requirements.push("Master's degree");
-    }
-    
-    // Look for experience requirements
-    const expMatch = description.match(/(\d+)\+?\s*years?\s*(?:of\s*)?experience/i);
-    if (expMatch) {
-      requirements.push(`${expMatch[1]}+ years experience`);
-    }
-    
-    // Look for specific certifications or tools
-    if (/certification|certified/i.test(description)) {
-      requirements.push('Professional certification');
-    }
-    
-    return requirements;
-  }
-  
+
   /**
    * Get cached analysis if still valid
    */
-  private getCachedAnalysis(description: string): JobAnalysis | null {
-    if (!analysisCache) {
-      return null;
-    }
+  private getCachedAnalysis(cacheKey: string): JobAnalysis | null {
+    if (!analysisCache) return null;
     
-    const now = Date.now();
-    const isExpired = (now - analysisCache.timestamp) > CACHE_DURATION;
-    const isSameJob = analysisCache.jobDescription === description;
-    
-    if (isExpired || !isSameJob) {
+    const isExpired = Date.now() - analysisCache.timestamp > CACHE_DURATION;
+    if (isExpired) {
       analysisCache = null;
       return null;
     }
     
-    return analysisCache.analysis;
+    // Simple cache key matching (in production, might want more sophisticated caching)
+    if (analysisCache.jobDescription === cacheKey) {
+      return analysisCache.analysis;
+    }
+    
+    return null;
   }
-  
+
   /**
    * Cache analysis result
    */
-  private cacheAnalysis(description: string, analysis: JobAnalysis): void {
+  private cacheAnalysis(cacheKey: string, analysis: JobAnalysis): void {
     analysisCache = {
-      jobDescription: description,
-      analysis: { ...analysis }, // Clone to avoid mutations
+      jobDescription: cacheKey,
+      analysis,
       timestamp: Date.now()
     };
   }
-  
-  /**
-   * Clear analysis cache
-   */
-  clearCache(): void {
-    analysisCache = null;
-  }
 }
 
 // ============================================================================
-// Global Analyzer Instance
+// Global Service Instance
 // ============================================================================
 
-let globalAnalyzer: JobAnalyzer | null = null;
+let globalJobAnalyzer: JobAnalyzer | null = null;
 
 /**
- * Get global job analyzer (singleton)
+ * Get global JobAnalyzer instance (singleton)
  */
 export function getJobAnalyzer(): JobAnalyzer {
-  if (!globalAnalyzer) {
-    globalAnalyzer = new JobAnalyzer();
+  if (!globalJobAnalyzer) {
+    globalJobAnalyzer = new JobAnalyzer();
   }
-  return globalAnalyzer;
-}
-
-/**
- * Reset analyzer instance (for testing)
- */
-export function resetJobAnalyzer(): void {
-  globalAnalyzer = null;
-  analysisCache = null;
+  return globalJobAnalyzer;
 }

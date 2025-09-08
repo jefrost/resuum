@@ -1,340 +1,326 @@
 /**
  * Bullets Table Component
- * Handles bullet points table rendering with state badges and sorting
+ * Simplified for AI-analysis approach
  */
 
 import { createSafeElement, setSafeTextContent } from './xss-safe-rendering';
-import type { Bullet, Role, Project, BulletFeatures } from '../types';
+import { getBulletDataService } from './bullet-data-service';
+import type { Bullet, Role, Project } from '../types';
 
 // ============================================================================
-// Table State and Configuration
-// ============================================================================
-
-export type SortCriteria = 'role' | 'project' | 'created';
-export type SortDirection = 'asc' | 'desc';
-
-export interface TableState {
-  sortBy: SortCriteria;
-  sortDirection: SortDirection;
-}
-
-// ============================================================================
-// Bullets Table Component
+// Bullets Table Class
 // ============================================================================
 
 export class BulletsTable {
   private container: HTMLElement;
-  private state: TableState = {
-    sortBy: 'role',
-    sortDirection: 'asc'
-  };
+  private bullets: Array<{
+    bullet: Bullet;
+    role: Role | null;
+    project: Project | null;
+  }> = [];
+  private filterText: string = '';
+  private sortBy: 'role' | 'project' | 'text' | 'modified' = 'modified';
+  private sortOrder: 'asc' | 'desc' = 'desc';
 
   constructor(container: HTMLElement) {
     this.container = container;
   }
 
-  // ============================================================================
-  // Public Interface
-  // ============================================================================
-
   /**
-   * Render the complete bullets table
+   * Render the bullets table
    */
-  render(bullets: Bullet[], roles: Role[], projects: Project[]): void {
+  async render(): Promise<void> {
+    await this.loadData();
+    
     this.container.innerHTML = '';
     
-    const tableContainer = createSafeElement('div', '', 'table-container');
+    const header = this.createTableHeader();
+    const table = this.createTable();
     
-    // Create table controls
-    const controls = this.createTableControls();
-    tableContainer.appendChild(controls);
-    
-    // Create table
-    const table = createSafeElement('table', '', 'bullets-table');
-    const thead = this.createTableHeader();
-    const tbody = this.createTableBody(bullets, roles, projects);
-    
-    table.appendChild(thead);
-    table.appendChild(tbody);
-    tableContainer.appendChild(table);
-    
-    this.container.appendChild(tableContainer);
+    this.container.appendChild(header);
+    this.container.appendChild(table);
   }
 
   /**
-   * Update sort criteria and re-render if needed
+   * Create table header with controls
    */
-  updateSort(sortBy: SortCriteria, direction?: SortDirection): void {
-    this.state.sortBy = sortBy;
-    if (direction) {
-      this.state.sortDirection = direction;
-    }
-  }
-
-  /**
-   * Get current sort state
-   */
-  getSortState(): TableState {
-    return { ...this.state };
-  }
-
-  // ============================================================================
-  // Table Controls
-  // ============================================================================
-
-  /**
-   * Create table controls (sorting, filtering)
-   */
-  private createTableControls(): HTMLElement {
-    const controls = createSafeElement('div', '', 'table-controls');
+  private createTableHeader(): HTMLElement {
+    const header = createSafeElement('div', '', 'bullets-table-header');
     
-    const sortLabel = createSafeElement('label', 'Sort by: ', 'control-label');
+    // Add bullet button
+    const addButton = createSafeElement('button', 'Add Bullet Point', 'btn btn-primary');
+    addButton.addEventListener('click', () => this.showAddModal());
+    
+    // Filter input
+    const filterInput = document.createElement('input') as HTMLInputElement;
+    filterInput.type = 'text';
+    filterInput.placeholder = 'Filter bullet points...';
+    filterInput.className = 'filter-input';
+    filterInput.value = this.filterText;
+    filterInput.addEventListener('input', (e) => {
+      this.filterText = (e.target as HTMLInputElement).value;
+      this.render();
+    });
+    
+    // Sort controls
+    const sortGroup = createSafeElement('div', '', 'sort-controls');
+    
     const sortSelect = document.createElement('select') as HTMLSelectElement;
     sortSelect.className = 'sort-select';
     
     const sortOptions = [
-      { value: 'role', label: 'Role (Chronological)' },
-      { value: 'project', label: 'Project Name' },
-      { value: 'created', label: 'Created Date' }
+      { value: 'modified', label: 'Last Modified' },
+      { value: 'role', label: 'Role' },
+      { value: 'project', label: 'Project' },
+      { value: 'text', label: 'Text' }
     ];
     
     sortOptions.forEach(option => {
       const optionElement = document.createElement('option');
       optionElement.value = option.value;
+      optionElement.selected = this.sortBy === option.value;
       setSafeTextContent(optionElement, option.label);
-      if (option.value === this.state.sortBy) {
-        optionElement.selected = true;
-      }
       sortSelect.appendChild(optionElement);
     });
     
     sortSelect.addEventListener('change', () => {
-      this.state.sortBy = sortSelect.value as SortCriteria;
-      this.dispatchSortChange();
+      this.sortBy = sortSelect.value as any;
+      this.render();
     });
     
-    controls.appendChild(sortLabel);
-    controls.appendChild(sortSelect);
+    const orderButton = createSafeElement('button', 
+      this.sortOrder === 'asc' ? '↑' : '↓', 
+      'btn btn-sm sort-order-btn'
+    );
+    orderButton.addEventListener('click', () => {
+      this.sortOrder = this.sortOrder === 'asc' ? 'desc' : 'asc';
+      this.render();
+    });
     
-    return controls;
+    sortGroup.appendChild(sortSelect);
+    sortGroup.appendChild(orderButton);
+    
+    header.appendChild(addButton);
+    header.appendChild(filterInput);
+    header.appendChild(sortGroup);
+    
+    return header;
   }
 
   /**
-   * Dispatch custom event when sort changes
+   * Create the main table
    */
-  private dispatchSortChange(): void {
-    const event = new CustomEvent('sort-change', {
-      detail: { sortBy: this.state.sortBy, sortDirection: this.state.sortDirection }
-    });
-    this.container.dispatchEvent(event);
-  }
-
-  // ============================================================================
-  // Table Structure
-  // ============================================================================
-
-  /**
-   * Create table header
-   */
-  private createTableHeader(): HTMLElement {
-    const thead = createSafeElement('thead', '', 'table-header');
-    const headerRow = createSafeElement('tr', '', 'header-row');
+  private createTable(): HTMLElement {
+    const table = createSafeElement('table', '', 'bullets-table');
     
-    const headers = [
-      { text: 'Role', class: 'role-header' },
-      { text: 'Project', class: 'project-header' },
-      { text: 'Bullet Text', class: 'text-header' },
-      { text: 'State', class: 'state-header' },
-      { text: 'Quality', class: 'quality-header' },
-      { text: 'Created', class: 'created-header' }
-    ];
+    // Table header
+    const thead = createSafeElement('thead');
+    const headerRow = createSafeElement('tr');
     
-    headers.forEach(header => {
-      const th = createSafeElement('th', header.text, header.class);
+    ['Role', 'Project', 'Bullet Text', 'Modified', 'Actions'].forEach(text => {
+      const th = createSafeElement('th', text, 'table-header-cell');
       headerRow.appendChild(th);
     });
     
     thead.appendChild(headerRow);
-    return thead;
-  }
-
-  /**
-   * Create table body with sorted data
-   */
-  private createTableBody(bullets: Bullet[], roles: Role[], projects: Project[]): HTMLElement {
-    const tbody = createSafeElement('tbody', '', 'table-body');
-    const sortedBullets = this.sortBullets(bullets, roles, projects);
+    table.appendChild(thead);
     
-    sortedBullets.forEach(bullet => {
-      const role = roles.find(r => r.id === bullet.roleId);
-      const project = projects.find(p => p.id === bullet.projectId);
-      
-      if (role && project) {
-        const row = this.createBulletRow(bullet, role, project);
+    // Table body
+    const tbody = createSafeElement('tbody');
+    const filteredBullets = this.getFilteredAndSortedBullets();
+    
+    if (filteredBullets.length === 0) {
+      const emptyRow = this.createEmptyRow();
+      tbody.appendChild(emptyRow);
+    } else {
+      filteredBullets.forEach(bulletData => {
+        const row = this.createBulletRow(bulletData);
         tbody.appendChild(row);
-      }
-    });
+      });
+    }
     
-    return tbody;
+    table.appendChild(tbody);
+    return table;
   }
 
-  // ============================================================================
-  // Row Creation
-  // ============================================================================
+  /**
+   * Create empty state row
+   */
+  private createEmptyRow(): HTMLElement {
+    const row = createSafeElement('tr', '', 'empty-row');
+    const cell = document.createElement('td');
+    cell.colSpan = 5;
+    cell.className = 'empty-cell';
+    setSafeTextContent(cell, 
+      this.filterText 
+        ? 'No bullet points match your filter' 
+        : 'No bullet points found. Add your first bullet point to get started.'
+    );
+    row.appendChild(cell);
+    return row;
+  }
 
   /**
-   * Create individual bullet row
+   * Create bullet row
    */
-  private createBulletRow(bullet: Bullet, role: Role, project: Project): HTMLElement {
+  private createBulletRow(bulletData: {
+    bullet: Bullet;
+    role: Role | null;
+    project: Project | null;
+  }): HTMLElement {
+    const { bullet, role, project } = bulletData;
     const row = createSafeElement('tr', '', 'bullet-row');
     
     // Role cell
     const roleCell = createSafeElement('td', '', 'role-cell');
-    setSafeTextContent(roleCell, `${role.title} - ${role.company}`);
+    setSafeTextContent(roleCell, 
+      role ? `${role.title} at ${role.company}` : 'Unknown Role'
+    );
     
     // Project cell
     const projectCell = createSafeElement('td', '', 'project-cell');
-    setSafeTextContent(projectCell, project.name);
+    setSafeTextContent(projectCell, 
+      project ? project.name : 'No Project'
+    );
     
-    // Text cell (truncated with hover for full text)
+    // Text cell (truncated for table display)
     const textCell = createSafeElement('td', '', 'text-cell');
     const truncatedText = bullet.text.length > 80 
-      ? bullet.text.substring(0, 80) + '...' 
+      ? bullet.text.substring(0, 80) + '...'
       : bullet.text;
     setSafeTextContent(textCell, truncatedText);
     textCell.title = bullet.text; // Full text on hover
     
-    // State cell with badge
-    const stateCell = createSafeElement('td', '', 'state-cell');
-    const stateBadge = this.createStateBadge(bullet.embeddingState);
-    stateCell.appendChild(stateBadge);
+    // Modified date cell
+    const modifiedCell = createSafeElement('td', '', 'modified-cell');
+    setSafeTextContent(modifiedCell, 
+      new Date(bullet.lastModified).toLocaleDateString()
+    );
     
-    // Quality cell with features
-    const qualityCell = createSafeElement('td', '', 'quality-cell');
-    const qualityIndicators = this.createQualityIndicators(bullet.features);
-    qualityCell.appendChild(qualityIndicators);
+    // Actions cell
+    const actionsCell = createSafeElement('td', '', 'actions-cell');
     
-    // Created cell
-    const createdCell = createSafeElement('td', '', 'created-cell');
-    const createdDate = new Date(bullet.createdAt).toLocaleDateString();
-    setSafeTextContent(createdCell, createdDate);
+    const editButton = createSafeElement('button', 'Edit', 'btn btn-sm btn-secondary');
+    editButton.addEventListener('click', () => this.editBullet(bullet.id));
     
+    const deleteButton = createSafeElement('button', 'Delete', 'btn btn-sm btn-danger');
+    deleteButton.addEventListener('click', () => this.deleteBullet(bullet.id));
+    
+    actionsCell.appendChild(editButton);
+    actionsCell.appendChild(deleteButton);
+    
+    // Assemble row
     row.appendChild(roleCell);
     row.appendChild(projectCell);
     row.appendChild(textCell);
-    row.appendChild(stateCell);
-    row.appendChild(qualityCell);
-    row.appendChild(createdCell);
+    row.appendChild(modifiedCell);
+    row.appendChild(actionsCell);
     
     return row;
   }
 
-  // ============================================================================
-  // Badge and Indicator Creation
-  // ============================================================================
-
   /**
-   * Create embedding state badge with proper styling
+   * Get filtered and sorted bullets
    */
-  private createStateBadge(state: string): HTMLElement {
-    const badge = createSafeElement('span', '', `state-badge state-badge--${state}`);
+  private getFilteredAndSortedBullets(): Array<{
+    bullet: Bullet;
+    role: Role | null;
+    project: Project | null;
+  }> {
+    let filtered = this.bullets;
     
-    const stateConfig = {
-      ready: { text: '✅ Ready', class: 'ready' },
-      pending: { text: '⏳ Pending', class: 'pending' },
-      stale: { text: '⚠️ Stale', class: 'stale' },
-      failed: { text: '❌ Failed', class: 'failed' }
-    };
-    
-    const config = stateConfig[state as keyof typeof stateConfig] || { text: '❓ Unknown', class: 'unknown' };
-    setSafeTextContent(badge, config.text);
-    
-    return badge;
-  }
-
-  /**
-   * Create quality feature indicators
-   */
-  private createQualityIndicators(features: BulletFeatures): HTMLElement {
-    const container = createSafeElement('div', '', 'quality-indicators');
-    
-    const indicators = [
-      { key: 'hasNumbers', symbol: '📊', active: features.hasNumbers, title: 'Has quantified results' },
-      { key: 'actionVerb', symbol: '⚡', active: features.actionVerb, title: 'Strong action verb' },
-      { key: 'lengthOk', symbol: '📏', active: features.lengthOk, title: 'Appropriate length' }
-    ];
-    
-    indicators.forEach(indicator => {
-      const span = createSafeElement('span', '', `quality-indicator ${indicator.active ? 'active' : 'inactive'}`);
-      setSafeTextContent(span, indicator.symbol);
-      span.title = indicator.title;
-      container.appendChild(span);
-    });
-    
-    return container;
-  }
-
-  // ============================================================================
-  // Data Sorting (Deterministic as per Plan)
-  // ============================================================================
-
-  /**
-   * Sort bullets based on current criteria with deterministic ordering
-   */
-  private sortBullets(bullets: Bullet[], roles: Role[], projects: Project[]): Bullet[] {
-    return bullets.slice().sort((a, b) => {
-      let comparison = 0;
-      
-      switch (this.state.sortBy) {
-        case 'role':
-          // Primary: Role order (chronological)
-          const roleA = roles.find(r => r.id === a.roleId);
-          const roleB = roles.find(r => r.id === b.roleId);
-          if (roleA && roleB) {
-            comparison = roleA.orderIndex - roleB.orderIndex;
-            if (comparison === 0) {
-              // Secondary: Project name
-              const projectA = projects.find(p => p.id === a.projectId);
-              const projectB = projects.find(p => p.id === b.projectId);
-              if (projectA && projectB) {
-                comparison = projectA.name.localeCompare(projectB.name);
-              }
-              if (comparison === 0) {
-                // Tertiary: Created date
-                comparison = a.createdAt - b.createdAt;
-              }
-            }
-          }
-          break;
-          
-        case 'project':
-          // Primary: Project name
-          const projA = projects.find(p => p.id === a.projectId);
-          const projB = projects.find(p => p.id === b.projectId);
-          if (projA && projB) {
-            comparison = projA.name.localeCompare(projB.name);
-            if (comparison === 0) {
-                // Secondary: Created date for same project
-                comparison = a.createdAt - b.createdAt;
-              }
-            }
-            break;
-            
-          case 'created':
-            // Primary: Created date
-            comparison = a.createdAt - b.createdAt;
-            if (comparison === 0) {
-              // Secondary: Role order for same date
-              const roleA = roles.find(r => r.id === a.roleId);
-              const roleB = roles.find(r => r.id === b.roleId);
-              if (roleA && roleB) {
-                comparison = roleA.orderIndex - roleB.orderIndex;
-              }
-            }
-            break;
-        }
-        
-        return this.state.sortDirection === 'desc' ? -comparison : comparison;
+    // Apply text filter
+    if (this.filterText) {
+      const filterLower = this.filterText.toLowerCase();
+      filtered = filtered.filter(bulletData => {
+        const { bullet, role, project } = bulletData;
+        return (
+          bullet.text.toLowerCase().includes(filterLower) ||
+          role?.title.toLowerCase().includes(filterLower) ||
+          role?.company.toLowerCase().includes(filterLower) ||
+          project?.name.toLowerCase().includes(filterLower)
+        );
       });
     }
+    
+    // Apply sorting
+    return filtered.sort((a, b) => {
+      let comparison = 0;
+      
+      switch (this.sortBy) {
+        case 'role':
+          const roleA = a.role?.title || '';
+          const roleB = b.role?.title || '';
+          comparison = roleA.localeCompare(roleB);
+          break;
+        case 'project':
+          const projectA = a.project?.name || '';
+          const projectB = b.project?.name || '';
+          comparison = projectA.localeCompare(projectB);
+          break;
+        case 'text':
+          comparison = a.bullet.text.localeCompare(b.bullet.text);
+          break;
+        case 'modified':
+          comparison = a.bullet.lastModified - b.bullet.lastModified;
+          break;
+      }
+      
+      return this.sortOrder === 'asc' ? comparison : -comparison;
+    });
   }
+
+  /**
+   * Load bullet data with context
+   */
+  private async loadData(): Promise<void> {
+    try {
+      const bulletService = getBulletDataService();
+      this.bullets = await bulletService.getBulletsWithContext();
+    } catch (error) {
+      console.error('Failed to load bullet data:', error);
+      this.bullets = [];
+    }
+  }
+
+  /**
+   * Show add bullet modal
+   */
+  private showAddModal(): void {
+    // TODO: Implement add bullet modal
+    console.log('Add bullet modal not implemented yet');
+  }
+
+  /**
+   * Edit bullet
+   */
+  private editBullet(bulletId: string): void {
+    // TODO: Implement edit bullet modal
+    console.log('Edit bullet not implemented yet:', bulletId);
+  }
+
+  /**
+   * Delete bullet
+   */
+  private async deleteBullet(bulletId: string): Promise<void> {
+    if (!confirm('Are you sure you want to delete this bullet point?')) {
+      return;
+    }
+    
+    try {
+      const bulletService = getBulletDataService();
+      await bulletService.deleteBullet(bulletId);
+      await this.render(); // Refresh table
+    } catch (error) {
+      console.error('Failed to delete bullet:', error);
+      alert('Failed to delete bullet point');
+    }
+  }
+
+  /**
+   * Refresh table data
+   */
+  async refresh(): Promise<void> {
+    await this.render();
+  }
+}

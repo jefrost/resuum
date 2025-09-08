@@ -357,29 +357,6 @@ var Resuum = (() => {
     }
     return element;
   }
-  function renderBulletPoint(bulletText, embeddingState) {
-    const container = createSafeElement("div", "", "bullet-point-container");
-    const textElement = createSafeElement("span", bulletText, "bullet-text");
-    const stateElement = createSafeElement("span", "", `embedding-state embedding-state--${embeddingState}`);
-    setSafeTextContent(stateElement, getEmbeddingStateLabel(embeddingState));
-    container.appendChild(textElement);
-    container.appendChild(stateElement);
-    return container;
-  }
-  function getEmbeddingStateLabel(state) {
-    switch (state) {
-      case "ready":
-        return "\u2713";
-      case "pending":
-        return "\u23F3";
-      case "stale":
-        return "\u26A0";
-      case "failed":
-        return "\u2717";
-      default:
-        return "?";
-    }
-  }
   function createErrorElement(message, title) {
     const container = createSafeElement("div", "", "error-message");
     if (title) {
@@ -399,129 +376,37 @@ var Resuum = (() => {
     }
   });
 
-  // src/utils/feature-detection.ts
-  function detectIndexedDB() {
-    try {
-      if (!("indexedDB" in window)) {
-        return false;
-      }
-      if (!window.indexedDB) {
-        return false;
-      }
-      if (typeof window.indexedDB.open !== "function") {
-        return false;
-      }
-      return true;
-    } catch (error) {
-      return false;
-    }
-  }
-  function detectWebWorkers() {
-    try {
-      return "Worker" in window && typeof Worker === "function";
-    } catch (error) {
-      return false;
-    }
-  }
-  function detectBlobWorkers() {
-    try {
-      if (!detectWebWorkers()) {
-        return false;
-      }
-      if (!("Blob" in window) || !("URL" in window) || typeof URL.createObjectURL !== "function") {
-        return false;
-      }
-      const testBlob = new Blob([""], { type: "application/javascript" });
-      const url = URL.createObjectURL(testBlob);
-      URL.revokeObjectURL(url);
-      return true;
-    } catch (error) {
-      return false;
-    }
-  }
-  function detectClipboardAPI() {
-    try {
-      return "navigator" in window && "clipboard" in navigator && typeof navigator.clipboard.writeText === "function";
-    } catch (error) {
-      return false;
-    }
-  }
-  function detectFetch() {
-    try {
-      return "fetch" in window && typeof fetch === "function";
-    } catch (error) {
-      return false;
-    }
-  }
-  function detectArrayBuffer() {
-    try {
-      return "ArrayBuffer" in window && "Float32Array" in window && typeof ArrayBuffer === "function" && typeof Float32Array === "function";
-    } catch (error) {
-      return false;
-    }
-  }
-  function detectTextEncoder() {
-    try {
-      return "TextEncoder" in window && "TextDecoder" in window && typeof TextEncoder === "function";
-    } catch (error) {
-      return false;
-    }
-  }
-  function detectCrypto() {
-    try {
-      return "crypto" in window && window.crypto && "getRandomValues" in window.crypto && typeof window.crypto.getRandomValues === "function";
-    } catch (error) {
-      return false;
-    }
-  }
-  function detectBrowserCapabilities() {
-    return {
-      indexedDB: detectIndexedDB(),
-      webWorkers: detectWebWorkers(),
-      blobWorkers: detectBlobWorkers(),
-      clipboardAPI: detectClipboardAPI(),
-      fetch: detectFetch(),
-      arrayBuffer: detectArrayBuffer(),
-      textEncoder: detectTextEncoder(),
-      crypto: detectCrypto()
-    };
-  }
-  var init_feature_detection = __esm({
-    "src/utils/feature-detection.ts"() {
-      "use strict";
-    }
-  });
-
   // src/storage/schema.ts
-  function validateStoreConfig(store) {
-    if (!store.name || !store.keyPath) {
-      return false;
-    }
-    if (store.indexes) {
-      for (const index of store.indexes) {
-        if (!index.name || !index.keyPath) {
-          return false;
-        }
+  function handleSchemaUpgrade(event, db) {
+    const oldVersion = event.oldVersion;
+    console.log(`Upgrading database from version ${oldVersion} to ${DB_SCHEMA.version}`);
+    if (oldVersion === 1) {
+      if (db.objectStoreNames.contains("embeddings")) {
+        db.deleteObjectStore("embeddings");
       }
+      if (db.objectStoreNames.contains("embedQueue")) {
+        db.deleteObjectStore("embedQueue");
+      }
+      console.log("Removed obsolete embedding stores");
     }
-    return true;
   }
-  var DB_NAME, DB_VERSION, DATABASE_SCHEMA, EMBEDDING_STATES, EMBEDDING_RETRY_LIMITS, QUEUE_PRIORITIES;
+  var DB_SCHEMA;
   var init_schema = __esm({
     "src/storage/schema.ts"() {
       "use strict";
-      DB_NAME = "ResuumDB";
-      DB_VERSION = 1;
-      DATABASE_SCHEMA = {
-        name: DB_NAME,
-        version: DB_VERSION,
+      DB_SCHEMA = {
+        name: "ResuumDB",
+        version: 2,
+        // Incremented for schema changes
         stores: [
           {
             name: "roles",
             keyPath: "id",
             indexes: [
               { name: "orderIndex", keyPath: "orderIndex" },
-              { name: "company", keyPath: "company" }
+              { name: "company", keyPath: "company" },
+              { name: "startDate", keyPath: "startDate" },
+              { name: "endDate", keyPath: "endDate" }
             ]
           },
           {
@@ -530,9 +415,8 @@ var Resuum = (() => {
             indexes: [
               { name: "roleId", keyPath: "roleId" },
               { name: "name", keyPath: "name" },
-              { name: "bulletCount", keyPath: "bulletCount" },
-              { name: "embeddingVersion", keyPath: "embeddingVersion" },
-              { name: "role_bulletCount", keyPath: ["roleId", "bulletCount"] }
+              { name: "createdAt", keyPath: "createdAt" },
+              { name: "role_created", keyPath: ["roleId", "createdAt"] }
             ]
           },
           {
@@ -541,36 +425,9 @@ var Resuum = (() => {
             indexes: [
               { name: "roleId", keyPath: "roleId" },
               { name: "projectId", keyPath: "projectId" },
-              { name: "normalizedFingerprint", keyPath: "normalizedFingerprint" },
-              { name: "embeddingState", keyPath: "embeddingState" },
+              { name: "source", keyPath: "source" },
               { name: "createdAt", keyPath: "createdAt" },
-              { name: "lastModified", keyPath: "lastModified" },
-              { name: "role_project", keyPath: ["roleId", "projectId"] },
-              { name: "role_state", keyPath: ["roleId", "embeddingState"] },
-              { name: "project_state", keyPath: ["projectId", "embeddingState"] },
-              { name: "fingerprint_role", keyPath: ["normalizedFingerprint", "roleId"] }
-            ]
-          },
-          {
-            name: "embeddings",
-            keyPath: "bulletId",
-            indexes: [
-              { name: "vendor", keyPath: "vendor" },
-              { name: "model", keyPath: "model" },
-              { name: "version", keyPath: "version" },
-              { name: "createdAt", keyPath: "createdAt" },
-              { name: "vendor_model_version", keyPath: ["vendor", "model", "version"] }
-            ]
-          },
-          {
-            name: "embedQueue",
-            keyPath: "id",
-            indexes: [
-              { name: "bulletId", keyPath: "bulletId", options: { unique: true } },
-              { name: "priority", keyPath: "priority" },
-              { name: "createdAt", keyPath: "createdAt" },
-              { name: "retryCount", keyPath: "retryCount" },
-              { name: "priority_created", keyPath: ["priority", "createdAt"] }
+              { name: "role_project", keyPath: ["roleId", "projectId"] }
             ]
           },
           {
@@ -580,229 +437,58 @@ var Resuum = (() => {
           }
         ]
       };
-      EMBEDDING_STATES = {
-        READY: "ready",
-        PENDING: "pending",
-        STALE: "stale",
-        FAILED: "failed"
-      };
-      EMBEDDING_RETRY_LIMITS = {
-        MAX_RETRIES: 3,
-        BACKOFF_BASE: 1e3,
-        // 1 second
-        BACKOFF_MULTIPLIER: 2
-      };
-      QUEUE_PRIORITIES = {
-        HIGH: 1,
-        // New bullets, user-initiated
-        NORMAL: 5,
-        // Batch operations
-        LOW: 10
-        // Background processing
-      };
-    }
-  });
-
-  // src/utils/uuid.ts
-  function generateUUID() {
-    if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-      const bytes = new Uint8Array(16);
-      crypto.getRandomValues(bytes);
-      if (bytes.length < 16) {
-        throw new Error("Failed to generate sufficient random bytes");
-      }
-      bytes[6] = (bytes[6] ?? 0) & 15 | 64;
-      bytes[8] = (bytes[8] ?? 0) & 63 | 128;
-      const hex = Array.from(bytes).map((b) => (b ?? 0).toString(16).padStart(2, "0")).join("");
-      return [
-        hex.slice(0, 8),
-        hex.slice(8, 12),
-        hex.slice(12, 16),
-        hex.slice(16, 20),
-        hex.slice(20, 32)
-      ].join("-");
-    } else {
-      return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-        const r = Math.random() * 16 | 0;
-        const v = c === "x" ? r : r & 3 | 8;
-        return v.toString(16);
-      });
-    }
-  }
-  function generateULID() {
-    const timestamp = Date.now();
-    const timestampPart = timestamp.toString(36).padStart(10, "0");
-    const randomPart = generateRandomString(16);
-    return `${timestampPart}_${randomPart}`;
-  }
-  function generateRandomString(length) {
-    const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
-    let result = "";
-    if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-      const bytes = new Uint8Array(length);
-      crypto.getRandomValues(bytes);
-      for (let i = 0; i < Math.min(bytes.length, length); i++) {
-        const byteValue = bytes[i] ?? 0;
-        result += chars[byteValue % chars.length] ?? "0";
-      }
-    } else {
-      for (let i = 0; i < length; i++) {
-        result += chars[Math.floor(Math.random() * chars.length)] ?? "0";
-      }
-    }
-    return result;
-  }
-  function createId(type = "bullet") {
-    if (type === "bullet" || type === "embed_queue") {
-      return generateULID();
-    }
-    return generateUUID();
-  }
-  var init_uuid = __esm({
-    "src/utils/uuid.ts"() {
-      "use strict";
     }
   });
 
   // src/storage/database.ts
-  async function getDatabase() {
-    if (!globalConnection) {
-      globalConnection = new DatabaseConnection();
+  async function initializeDatabase() {
+    if (dbInstance) {
+      return dbInstance;
     }
-    return globalConnection.open();
-  }
-  var DatabaseConnection, globalConnection;
-  var init_database = __esm({
-    "src/storage/database.ts"() {
-      "use strict";
-      init_feature_detection();
-      init_schema();
-      init_uuid();
-      DatabaseConnection = class {
-        db = null;
-        openPromise = null;
-        constructor() {
-          const capabilities = detectBrowserCapabilities();
-          if (!capabilities.indexedDB) {
-            throw new Error("IndexedDB is not supported in this browser. Please use Chrome 91+, Firefox 90+, Safari 14+, or Edge 91+.");
-          }
-        }
-        /**
-         * Open database connection with schema migration
-         */
-        async open() {
-          if (this.db && !this.db.version) {
-            this.db = null;
-            this.openPromise = null;
-          }
-          if (this.db) {
-            return this.db;
-          }
-          if (this.openPromise) {
-            return this.openPromise;
-          }
-          this.openPromise = this.performOpen();
-          return this.openPromise;
-        }
-        async performOpen() {
-          return new Promise((resolve, reject) => {
-            const request = indexedDB.open(DB_NAME, DB_VERSION);
-            request.onerror = () => {
-              const error = request.error;
-              console.error("Failed to open database:", error);
-              reject(new Error(`Database connection failed: ${error?.message || "Unknown error"}`));
-            };
-            request.onsuccess = () => {
-              this.db = request.result;
-              this.db.onclose = () => {
-                console.warn("Database connection closed unexpectedly");
-                this.db = null;
-                this.openPromise = null;
-              };
-              this.db.onversionchange = () => {
-                console.warn("Database version changed by another tab");
-                this.db?.close();
-                this.db = null;
-                this.openPromise = null;
-              };
-              resolve(this.db);
-            };
-            request.onupgradeneeded = (event) => {
-              const db = request.result;
-              const transaction = request.transaction;
-              if (!transaction) {
-                reject(new Error("No transaction available during upgrade"));
-                return;
-              }
-              try {
-                this.performMigration(db, event.oldVersion, event.newVersion || DB_VERSION);
-              } catch (error) {
-                console.error("Migration failed:", error);
-                reject(error);
-              }
-            };
-            request.onblocked = () => {
-              console.warn("Database upgrade blocked by another tab");
-              reject(new Error("Database upgrade blocked. Please close other tabs and try again."));
-            };
-          });
-        }
-        /**
-         * Perform database schema migration
-         */
-        performMigration(db, oldVersion, newVersion) {
-          console.log(`Migrating database from version ${oldVersion} to ${newVersion}`);
-          if (oldVersion < 1) {
-            this.createInitialSchema(db);
-          }
-        }
-        /**
-         * Create initial database schema
-         */
-        createInitialSchema(db) {
-          for (const storeConfig of DATABASE_SCHEMA.stores) {
-            if (!validateStoreConfig(storeConfig)) {
-              throw new Error(`Invalid store configuration: ${storeConfig.name}`);
-            }
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(DB_SCHEMA.name, DB_SCHEMA.version);
+      request.onerror = () => {
+        reject(new Error(`Failed to open database: ${request.error?.message}`));
+      };
+      request.onsuccess = () => {
+        dbInstance = request.result;
+        console.log(`Database ${DB_SCHEMA.name} opened successfully`);
+        resolve(dbInstance);
+      };
+      request.onupgradeneeded = (event) => {
+        const db = request.result;
+        console.log(`Upgrading database from version ${event.oldVersion} to ${DB_SCHEMA.version}`);
+        handleSchemaUpgrade(event, db);
+        DB_SCHEMA.stores.forEach((storeConfig) => {
+          if (!db.objectStoreNames.contains(storeConfig.name)) {
             const store = db.createObjectStore(storeConfig.name, {
               keyPath: storeConfig.keyPath
             });
-            if (storeConfig.indexes) {
-              for (const indexConfig of storeConfig.indexes) {
-                store.createIndex(
-                  indexConfig.name,
-                  indexConfig.keyPath,
-                  indexConfig.options || {}
-                );
-              }
-            }
+            storeConfig.indexes?.forEach((indexConfig) => {
+              store.createIndex(
+                indexConfig.name,
+                indexConfig.keyPath,
+                indexConfig.options
+              );
+            });
+            console.log(`Created store: ${storeConfig.name}`);
           }
-          console.log("Initial database schema created successfully");
-        }
-        /**
-         * Close database connection
-         */
-        close() {
-          if (this.db) {
-            this.db.close();
-            this.db = null;
-            this.openPromise = null;
-          }
-        }
-        /**
-         * Get current database instance
-         */
-        getDatabase() {
-          return this.db;
-        }
-        /**
-         * Check if database is ready
-         */
-        isReady() {
-          return this.db !== null;
-        }
+        });
       };
-      globalConnection = null;
+    });
+  }
+  async function getDatabase() {
+    if (!dbInstance) {
+      return initializeDatabase();
+    }
+    return dbInstance;
+  }
+  var dbInstance;
+  var init_database = __esm({
+    "src/storage/database.ts"() {
+      "use strict";
+      init_schema();
+      dbInstance = null;
     }
   });
 
@@ -898,20 +584,6 @@ var Resuum = (() => {
       });
     });
   }
-  async function getBulletsByState(state) {
-    return executeTransaction(["bullets"], "readonly", async (_, stores) => {
-      return new Promise((resolve, reject) => {
-        const index = stores.bullets.index("embeddingState");
-        const request = index.getAll(state);
-        request.onsuccess = () => {
-          resolve(request.result || []);
-        };
-        request.onerror = () => {
-          reject(new Error(`Failed to get bullets by state: ${request.error?.message}`));
-        };
-      });
-    });
-  }
   var init_transactions = __esm({
     "src/storage/transactions.ts"() {
       "use strict";
@@ -919,400 +591,143 @@ var Resuum = (() => {
     }
   });
 
-  // src/storage/embedding-state.ts
-  function getEmbeddingStateMachine() {
-    if (!globalStateMachine) {
-      globalStateMachine = new EmbeddingStateMachine();
-    }
-    return globalStateMachine;
-  }
-  async function markBulletChanged(bulletId) {
-    const stateMachine = getEmbeddingStateMachine();
-    await stateMachine.transitionToStale(bulletId);
-  }
-  async function queueBulletForEmbedding(bulletId) {
-    const stateMachine = getEmbeddingStateMachine();
-    await stateMachine.transitionToPending(bulletId, QUEUE_PRIORITIES.HIGH);
-  }
-  var EmbeddingStateMachine, globalStateMachine;
-  var init_embedding_state = __esm({
-    "src/storage/embedding-state.ts"() {
-      "use strict";
-      init_transactions();
-      init_schema();
-      init_uuid();
-      EmbeddingStateMachine = class {
-        /**
-         * Transition bullet to pending state and add to queue
-         */
-        async transitionToPending(bulletId, priority = QUEUE_PRIORITIES.NORMAL) {
-          await executeTransaction(["bullets", "embedQueue"], "readwrite", async (_, stores) => {
-            const bulletRequest = stores.bullets.get(bulletId);
-            const bullet = await new Promise((resolve, reject) => {
-              bulletRequest.onsuccess = () => {
-                if (bulletRequest.result) {
-                  resolve(bulletRequest.result);
-                } else {
-                  reject(new Error(`Bullet not found: ${bulletId}`));
-                }
-              };
-              bulletRequest.onerror = () => reject(bulletRequest.error);
-            });
-            const updatedBullet = {
-              ...bullet,
-              embeddingState: EMBEDDING_STATES.PENDING,
-              lastModified: Date.now()
-            };
-            await new Promise((resolve, reject) => {
-              const updateRequest = stores.bullets.put(updatedBullet);
-              updateRequest.onsuccess = () => resolve();
-              updateRequest.onerror = () => reject(updateRequest.error);
-            });
-            const queueIndex = stores.embedQueue.index("bulletId");
-            const existingRequest = queueIndex.get(bulletId);
-            await new Promise((resolve, reject) => {
-              existingRequest.onsuccess = () => {
-                if (!existingRequest.result) {
-                  const queueItem = {
-                    id: createId("embed_queue"),
-                    bulletId,
-                    priority,
-                    createdAt: Date.now(),
-                    retryCount: 0
-                  };
-                  const addRequest = stores.embedQueue.add(queueItem);
-                  addRequest.onsuccess = () => resolve();
-                  addRequest.onerror = () => reject(addRequest.error);
-                } else {
-                  resolve();
-                }
-              };
-              existingRequest.onerror = () => reject(existingRequest.error);
-            });
-          });
-        }
-        /**
-         * Transition bullet to ready state and remove from queue
-         */
-        async transitionToReady(bulletId) {
-          await executeTransaction(["bullets", "embedQueue"], "readwrite", async (_, stores) => {
-            const bulletRequest = stores.bullets.get(bulletId);
-            const bullet = await new Promise((resolve, reject) => {
-              bulletRequest.onsuccess = () => {
-                if (bulletRequest.result) {
-                  resolve(bulletRequest.result);
-                } else {
-                  reject(new Error(`Bullet not found: ${bulletId}`));
-                }
-              };
-              bulletRequest.onerror = () => reject(bulletRequest.error);
-            });
-            const updatedBullet = {
-              ...bullet,
-              embeddingState: EMBEDDING_STATES.READY,
-              lastEmbeddedAt: Date.now(),
-              retryCount: 0,
-              lastModified: Date.now()
-            };
-            await new Promise((resolve, reject) => {
-              const updateRequest = stores.bullets.put(updatedBullet);
-              updateRequest.onsuccess = () => resolve();
-              updateRequest.onerror = () => reject(updateRequest.error);
-            });
-            const queueIndex = stores.embedQueue.index("bulletId");
-            const queueRequest = queueIndex.get(bulletId);
-            await new Promise((resolve, reject) => {
-              queueRequest.onsuccess = () => {
-                if (queueRequest.result) {
-                  const deleteRequest = stores.embedQueue.delete(queueRequest.result.id);
-                  deleteRequest.onsuccess = () => resolve();
-                  deleteRequest.onerror = () => reject(deleteRequest.error);
-                } else {
-                  resolve();
-                }
-              };
-              queueRequest.onerror = () => reject(queueRequest.error);
-            });
-          });
-        }
-        /**
-         * Transition bullet to stale state (when text changes)
-         */
-        async transitionToStale(bulletId) {
-          const bullet = await getById("bullets", bulletId);
-          if (!bullet) {
-            throw new Error(`Bullet not found: ${bulletId}`);
-          }
-          const updatedBullet = {
-            ...bullet,
-            embeddingState: EMBEDDING_STATES.STALE,
-            lastModified: Date.now()
-          };
-          await update("bullets", updatedBullet);
-        }
-        /**
-         * Transition bullet to failed state with retry logic
-         */
-        async transitionToFailed(bulletId) {
-          await executeTransaction(["bullets", "embedQueue"], "readwrite", async (_, stores) => {
-            const bulletRequest = stores.bullets.get(bulletId);
-            const bullet = await new Promise((resolve, reject) => {
-              bulletRequest.onsuccess = () => {
-                if (bulletRequest.result) {
-                  resolve(bulletRequest.result);
-                } else {
-                  reject(new Error(`Bullet not found: ${bulletId}`));
-                }
-              };
-              bulletRequest.onerror = () => reject(bulletRequest.error);
-            });
-            const retryCount = bullet.retryCount + 1;
-            const shouldRetry = retryCount <= EMBEDDING_RETRY_LIMITS.MAX_RETRIES;
-            if (shouldRetry) {
-              const updatedBullet = {
-                ...bullet,
-                embeddingState: EMBEDDING_STATES.PENDING,
-                retryCount,
-                lastModified: Date.now()
-              };
-              await new Promise((resolve, reject) => {
-                const updateRequest = stores.bullets.put(updatedBullet);
-                updateRequest.onsuccess = () => resolve();
-                updateRequest.onerror = () => reject(updateRequest.error);
-              });
-              const queueIndex = stores.embedQueue.index("bulletId");
-              const queueRequest = queueIndex.get(bulletId);
-              await new Promise((resolve, reject) => {
-                queueRequest.onsuccess = () => {
-                  if (queueRequest.result) {
-                    const delayMs = EMBEDDING_RETRY_LIMITS.BACKOFF_BASE * Math.pow(EMBEDDING_RETRY_LIMITS.BACKOFF_MULTIPLIER, retryCount - 1);
-                    const updatedQueueItem = {
-                      ...queueRequest.result,
-                      retryCount,
-                      createdAt: Date.now() + delayMs
-                      // Delay retry
-                    };
-                    const updateRequest = stores.embedQueue.put(updatedQueueItem);
-                    updateRequest.onsuccess = () => resolve();
-                    updateRequest.onerror = () => reject(updateRequest.error);
-                  } else {
-                    resolve();
-                  }
-                };
-                queueRequest.onerror = () => reject(queueRequest.error);
-              });
-            } else {
-              const updatedBullet = {
-                ...bullet,
-                embeddingState: EMBEDDING_STATES.FAILED,
-                retryCount,
-                lastModified: Date.now()
-              };
-              await new Promise((resolve, reject) => {
-                const updateRequest = stores.bullets.put(updatedBullet);
-                updateRequest.onsuccess = () => resolve();
-                updateRequest.onerror = () => reject(updateRequest.error);
-              });
-              const queueIndex = stores.embedQueue.index("bulletId");
-              const queueRequest = queueIndex.get(bulletId);
-              await new Promise((resolve, reject) => {
-                queueRequest.onsuccess = () => {
-                  if (queueRequest.result) {
-                    const deleteRequest = stores.embedQueue.delete(queueRequest.result.id);
-                    deleteRequest.onsuccess = () => resolve();
-                    deleteRequest.onerror = () => reject(deleteRequest.error);
-                  } else {
-                    resolve();
-                  }
-                };
-                queueRequest.onerror = () => reject(queueRequest.error);
-              });
-            }
-          });
-        }
-        /**
-         * Get bullets by state with pagination
-         */
-        async getBulletsByState(state, limit, offset) {
-          const bullets = await getBulletsByState(state);
-          if (limit !== void 0) {
-            const start = offset || 0;
-            return bullets.slice(start, start + limit);
-          }
-          return bullets;
-        }
-        /**
-         * Get embedding queue with priority ordering
-         */
-        async getQueue(limit) {
-          return executeTransaction(["embedQueue"], "readonly", async (_, stores) => {
-            return new Promise((resolve, reject) => {
-              const index = stores.embedQueue.index("priority_created");
-              const request = limit ? index.getAll(null, limit) : index.getAll();
-              request.onsuccess = () => {
-                const items = request.result || [];
-                const now = Date.now();
-                const readyItems = items.filter((item) => item.createdAt <= now);
-                readyItems.sort((a, b) => {
-                  if (a.priority !== b.priority) {
-                    return a.priority - b.priority;
-                  }
-                  return a.createdAt - b.createdAt;
-                });
-                resolve(limit ? readyItems.slice(0, limit) : readyItems);
-              };
-              request.onerror = () => {
-                reject(new Error(`Failed to get queue: ${request.error?.message}`));
-              };
-            });
-          });
-        }
-        /**
-         * Peek at next queue item without removing it
-         */
-        async peekQueue() {
-          const items = await this.getQueue(1);
-          return items.length > 0 ? items[0] || null : null;
-        }
-        /**
-         * Remove item from queue (for processing)
-         */
-        async dequeue(queueItemId) {
-          await deleteById("embedQueue", queueItemId);
-        }
-        /**
-         * Get queue statistics
-         */
-        async getQueueStats() {
-          const items = await this.getQueue();
-          const oldestItem = items.length > 0 ? Math.min(...items.map((i) => i.createdAt)) : void 0;
-          const stats = {
-            total: items.length,
-            byPriority: {},
-            oldestItem,
-            avgRetryCount: items.length > 0 ? items.reduce((sum, i) => sum + i.retryCount, 0) / items.length : 0
-          };
-          for (const item of items) {
-            stats.byPriority[item.priority] = (stats.byPriority[item.priority] || 0) + 1;
-          }
-          return stats;
-        }
-        /**
-         * Clear failed items from queue (cleanup)
-         */
-        async clearFailedQueue() {
-          return executeTransaction(["embedQueue", "bullets"], "readwrite", async (_, stores) => {
-            let clearedCount = 0;
-            const queueRequest = stores.embedQueue.getAll();
-            const queueItems = await new Promise((resolve, reject) => {
-              queueRequest.onsuccess = () => resolve(queueRequest.result || []);
-              queueRequest.onerror = () => reject(queueRequest.error);
-            });
-            for (const queueItem of queueItems) {
-              const bulletRequest = stores.bullets.get(queueItem.bulletId);
-              const bullet = await new Promise((resolve, reject) => {
-                bulletRequest.onsuccess = () => resolve(bulletRequest.result || null);
-                bulletRequest.onerror = () => reject(bulletRequest.error);
-              });
-              if (!bullet || bullet.embeddingState === EMBEDDING_STATES.FAILED) {
-                await new Promise((resolve, reject) => {
-                  const deleteRequest = stores.embedQueue.delete(queueItem.id);
-                  deleteRequest.onsuccess = () => {
-                    clearedCount++;
-                    resolve();
-                  };
-                  deleteRequest.onerror = () => reject(deleteRequest.error);
-                });
-              }
-            }
-            return clearedCount;
-          });
-        }
-        /**
-         * Reset all stale bullets to pending (for reprocessing)
-         */
-        async requeueStale(priority = QUEUE_PRIORITIES.LOW) {
-          const staleBullets = await this.getBulletsByState(EMBEDDING_STATES.STALE);
-          for (const bullet of staleBullets) {
-            await this.transitionToPending(bullet.id, priority);
-          }
-          return staleBullets.length;
-        }
-        /**
-         * Coalesce duplicate queue entries (cleanup)
-         */
-        async coalesceQueue() {
-          return executeTransaction(["embedQueue"], "readwrite", async (_, stores) => {
-            const seenBullets = /* @__PURE__ */ new Set();
-            let removedCount = 0;
-            const index = stores.embedQueue.index("priority_created");
-            const cursor = index.openCursor();
-            await new Promise((resolve, reject) => {
-              cursor.onsuccess = () => {
-                const cursorResult = cursor.result;
-                if (cursorResult) {
-                  const queueItem = cursorResult.value;
-                  if (seenBullets.has(queueItem.bulletId)) {
-                    cursorResult.delete();
-                    removedCount++;
-                  } else {
-                    seenBullets.add(queueItem.bulletId);
-                  }
-                  cursorResult.continue();
-                } else {
-                  resolve();
-                }
-              };
-              cursor.onerror = () => reject(cursor.error);
-            });
-            return removedCount;
-          });
-        }
-      };
-      globalStateMachine = null;
-    }
-  });
-
   // src/ui/bullet-validator.ts
-  var BulletValidator;
+  function getBulletValidator() {
+    if (!globalBulletValidator) {
+      globalBulletValidator = new BulletValidator();
+    }
+    return globalBulletValidator;
+  }
+  var VALIDATION_RULES, BulletValidator, globalBulletValidator;
   var init_bullet_validator = __esm({
     "src/ui/bullet-validator.ts"() {
       "use strict";
-      init_xss_safe_rendering();
+      VALIDATION_RULES = {
+        minLength: 10,
+        maxLength: 500,
+        maxWords: 75
+      };
       BulletValidator = class {
-        validate(data) {
+        /**
+         * Validate bullet point text
+         */
+        validateText(text) {
           const errors = [];
-          if (!data.text) errors.push("Please enter bullet point text");
-          if (data.text.length > 500) errors.push("Bullet point is too long (maximum 500 characters)");
-          if (data.roleId === "new_role" && (!data.newRoleTitle || !data.newRoleCompany)) {
-            errors.push("Please enter role title and company");
+          const warnings = [];
+          if (!text || typeof text !== "string") {
+            errors.push("Bullet point text is required");
+            return { isValid: false, errors, warnings };
           }
-          if (data.projectId === "new_project" && !data.newProjectName) {
-            errors.push("Please enter project name");
+          const trimmedText = text.trim();
+          if (trimmedText.length === 0) {
+            errors.push("Bullet point cannot be empty");
+          } else if (trimmedText.length < VALIDATION_RULES.minLength) {
+            errors.push(`Bullet point should be at least ${VALIDATION_RULES.minLength} characters long`);
+          } else if (trimmedText.length > VALIDATION_RULES.maxLength) {
+            errors.push(`Bullet point should be less than ${VALIDATION_RULES.maxLength} characters long`);
           }
-          return { isValid: errors.length === 0, errors };
-        }
-        analyzeFeatures(text) {
-          const wordCount = text.trim().split(/\s+/).length;
+          const wordCount = trimmedText.split(/\s+/).length;
+          if (wordCount > VALIDATION_RULES.maxWords) {
+            warnings.push(`Bullet point has ${wordCount} words. Consider keeping it under ${VALIDATION_RULES.maxWords} words for readability`);
+          }
+          if (trimmedText.length > 0) {
+            if (!trimmedText.match(/^[A-Z]/) && !trimmedText.match(/^[0-9]/)) {
+              warnings.push("Consider starting with a capital letter or number");
+            }
+            if (wordCount < 5) {
+              warnings.push("Bullet point seems very short. Consider adding more detail about your impact");
+            }
+            if (trimmedText.includes("  ")) {
+              warnings.push("Remove extra spaces between words");
+            }
+            if (trimmedText.startsWith("\u2022") || trimmedText.startsWith("-")) {
+              warnings.push("Remove bullet symbols - they will be added automatically");
+            }
+          }
           return {
-            hasNumbers: /\d/.test(text),
-            actionVerb: /^(led|managed|developed|created|built|achieved|analyzed|designed|implemented)/i.test(text.trim()),
-            lengthOk: wordCount >= 5 && wordCount <= 22
+            isValid: errors.length === 0,
+            errors,
+            warnings
           };
         }
-        updateCharCounter(text, counter) {
-          const length = text.length;
-          const maxLength = 500;
-          setSafeTextContent(counter, `${length}/${maxLength} characters`);
-          if (length > maxLength * 0.9) {
-            counter.className = "char-counter char-counter--warning";
-          } else if (length > maxLength) {
-            counter.className = "char-counter char-counter--error";
-          } else {
-            counter.className = "char-counter";
+        /**
+         * Validate complete bullet data
+         */
+        validateBullet(bulletData) {
+          const textValidation = this.validateText(bulletData.text);
+          const errors = [...textValidation.errors];
+          const warnings = [...textValidation.warnings];
+          if (!bulletData.roleId || bulletData.roleId.trim().length === 0) {
+            errors.push("Role selection is required");
           }
+          if (!bulletData.projectId || bulletData.projectId.trim().length === 0) {
+            errors.push("Project selection is required");
+          }
+          return {
+            isValid: errors.length === 0,
+            errors,
+            warnings
+          };
+        }
+        /**
+         * Check for potential duplicates
+         */
+        checkForDuplicates(newText, existingBullets) {
+          const normalizedNew = this.normalizeText(newText);
+          const similarBullets = [];
+          for (const bullet of existingBullets) {
+            const normalizedExisting = this.normalizeText(bullet.text);
+            const similarity = this.calculateTextSimilarity(normalizedNew, normalizedExisting);
+            if (similarity > 0.8) {
+              similarBullets.push({ bullet, similarity });
+            }
+          }
+          return {
+            hasDuplicates: similarBullets.length > 0,
+            similarBullets: similarBullets.sort((a, b) => b.similarity - a.similarity)
+          };
+        }
+        /**
+         * Normalize text for comparison
+         */
+        normalizeText(text) {
+          return text.toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+        }
+        /**
+         * Calculate simple text similarity (Jaccard similarity)
+         */
+        calculateTextSimilarity(text1, text2) {
+          const words1 = new Set(text1.split(/\s+/));
+          const words2 = new Set(text2.split(/\s+/));
+          const intersection = new Set([...words1].filter((word) => words2.has(word)));
+          const union = /* @__PURE__ */ new Set([...words1, ...words2]);
+          return union.size === 0 ? 0 : intersection.size / union.size;
+        }
+        /**
+         * Get validation suggestions
+         */
+        getImprovementSuggestions(text) {
+          const suggestions = [];
+          const trimmedText = text.trim();
+          if (trimmedText.length === 0) {
+            return ["Add meaningful content describing your accomplishment or responsibility"];
+          }
+          const startsWithActionVerb = /^(Led|Managed|Developed|Created|Implemented|Analyzed|Designed|Built|Optimized|Increased|Decreased|Improved|Reduced|Achieved|Delivered|Coordinated|Established|Generated|Streamlined)/i.test(trimmedText);
+          if (!startsWithActionVerb) {
+            suggestions.push("Consider starting with a strong action verb (Led, Developed, Implemented, etc.)");
+          }
+          const hasNumbers = /\d/.test(trimmedText);
+          if (!hasNumbers) {
+            suggestions.push("Consider adding specific numbers or metrics to quantify your impact");
+          }
+          const hasImpactWords = /(result|impact|effect|outcome|improvement|increase|decrease|saving|revenue|efficiency)/i.test(trimmedText);
+          if (!hasImpactWords) {
+            suggestions.push("Consider adding the impact or results of your work");
+          }
+          return suggestions;
         }
       };
+      globalBulletValidator = null;
     }
   });
 
@@ -1325,7 +740,6 @@ var Resuum = (() => {
       init_xss_safe_rendering();
       init_transactions();
       BulletFormBuilder = class {
-        validator = new BulletValidator();
         roles = [];
         projects = [];
         async createForm(config, isEdit, onSubmit, onCancel) {
@@ -1335,11 +749,9 @@ var Resuum = (() => {
             this.createRoleSection(config.defaultRoleId),
             this.createProjectSection(config.defaultRoleId, config.defaultProjectId),
             this.createTextSection(config.bullet?.text || ""),
-            this.createQualitySection(),
             this.createButtonSection(isEdit, onCancel)
           );
           this.setupEvents(form, onSubmit);
-          this.updateQualityPreview(form, config.bullet?.text || "");
           return form;
         }
         createRoleSection(defaultRoleId) {
@@ -1355,12 +767,7 @@ var Resuum = (() => {
             option.selected = role.id === defaultRoleId;
             select.appendChild(option);
           });
-          const newOption = document.createElement("option");
-          newOption.value = "new_role";
-          newOption.textContent = "+ New Role";
-          select.appendChild(newOption);
-          const newInputs = this.createNewRoleInputs();
-          group.append(label, select, newInputs);
+          group.append(label, select);
           return group;
         }
         createProjectSection(defaultRoleId, defaultProjectId) {
@@ -1370,8 +777,7 @@ var Resuum = (() => {
           select.id = "bullet-project";
           select.className = "form-select";
           this.updateProjectOptions(select, defaultRoleId, defaultProjectId);
-          const newInputs = this.createNewProjectInputs();
-          group.append(label, select, newInputs);
+          group.append(label, select);
           return group;
         }
         createTextSection(defaultText) {
@@ -1384,151 +790,55 @@ var Resuum = (() => {
           textarea.placeholder = "Enter your bullet point...";
           textarea.rows = 4;
           textarea.value = defaultText;
-          textarea.disabled = false;
-          this.validator.updateCharCounter(defaultText, counter);
+          this.updateCharCounter(defaultText, counter);
           group.append(label, textarea, counter);
-          textarea.addEventListener("input", (e) => {
-            console.log("Text input working:", textarea.value.length);
-          });
-          return group;
-        }
-        createQualitySection() {
-          const group = createSafeElement("div", "", "form-group");
-          const label = createSafeElement("label", "Quality Indicators", "form-label");
-          const preview = createSafeElement("div", "", "quality-preview");
-          group.append(label, preview);
           return group;
         }
         createButtonSection(isEdit, onCancel) {
           const group = createSafeElement("div", "", "modal-buttons");
           const cancelBtn = document.createElement("button");
-          const saveBtn = document.createElement("button");
           cancelBtn.type = "button";
           cancelBtn.textContent = "Cancel";
           cancelBtn.className = "btn btn-secondary";
           cancelBtn.onclick = onCancel;
+          const saveBtn = document.createElement("button");
           saveBtn.type = "submit";
           saveBtn.textContent = isEdit ? "Update" : "Create";
           saveBtn.className = "btn btn-primary";
           group.append(cancelBtn, saveBtn);
           return group;
         }
-        createNewRoleInputs() {
-          const container = createSafeElement("div", "", "new-role-input hidden");
-          const titleInput = document.createElement("input");
-          const companyInput = document.createElement("input");
-          titleInput.id = "new-role-title";
-          titleInput.placeholder = "Role title";
-          titleInput.className = "form-input";
-          companyInput.id = "new-role-company";
-          companyInput.placeholder = "Company name";
-          companyInput.className = "form-input";
-          container.append(titleInput, companyInput);
-          titleInput.addEventListener("input", (e) => {
-            console.log("Role title input working");
-          });
-          return container;
-        }
-        createNewProjectInputs() {
-          const container = createSafeElement("div", "", "new-project-input hidden");
-          const nameInput = document.createElement("input");
-          const descInput = document.createElement("textarea");
-          nameInput.id = "new-project-name";
-          nameInput.placeholder = "Project name";
-          nameInput.className = "form-input";
-          descInput.id = "new-project-description";
-          descInput.placeholder = "Description (optional)";
-          descInput.className = "form-textarea";
-          descInput.rows = 2;
-          container.append(nameInput, descInput);
-          return container;
-        }
         setupEvents(form, onSubmit) {
           const roleSelect = form.querySelector("#bullet-role");
           const projectSelect = form.querySelector("#bullet-project");
-          const textInput = form.querySelector("#bullet-text");
-          const newRoleInputs = form.querySelector(".new-role-input");
-          const newProjectInputs = form.querySelector(".new-project-input");
-          if (roleSelect.value === "new_role") {
-            newRoleInputs.classList.remove("hidden");
-          }
-          if (projectSelect.value === "new_project") {
-            newProjectInputs.classList.remove("hidden");
-          }
+          const textarea = form.querySelector("#bullet-text");
+          const counter = form.querySelector(".char-counter");
           roleSelect.addEventListener("change", () => {
-            if (roleSelect.value === "new_role") {
-              this.updateProjectOptions(projectSelect, "new_role");
-            } else {
-              this.updateProjectOptions(projectSelect, roleSelect.value);
-            }
+            this.updateProjectOptions(projectSelect, roleSelect.value);
           });
-          textInput.addEventListener("input", () => {
-            console.log("Text input working, length:", textInput.value.length);
-            const counter = form.querySelector(".char-counter");
-            this.validator.updateCharCounter(textInput.value, counter);
-            this.updateQualityPreview(form, textInput.value);
+          textarea.addEventListener("input", () => {
+            this.updateCharCounter(textarea.value, counter);
           });
-          roleSelect.onchange = () => {
-            const newRoleInputs2 = form.querySelector(".new-role-input");
-            if (roleSelect.value === "new_role") {
-              newRoleInputs2.classList.remove("hidden");
-            } else {
-              newRoleInputs2.classList.add("hidden");
-              this.updateProjectOptions(projectSelect, roleSelect.value);
-            }
-          };
-          projectSelect.onchange = () => {
-            const newProjectInputs2 = form.querySelector(".new-project-input");
-            newProjectInputs2.classList.toggle("hidden", projectSelect.value !== "new_project");
-          };
-          textInput.oninput = () => {
-            const counter = form.querySelector(".char-counter");
-            this.validator.updateCharCounter(textInput.value, counter);
-            this.updateQualityPreview(form, textInput.value);
-          };
-          form.onsubmit = async (e) => {
+          form.addEventListener("submit", async (e) => {
             e.preventDefault();
             const data = this.getFormData(form);
-            const validation = this.validator.validate(data);
+            const validation = this.validateFormData(data);
             if (!validation.isValid) {
               alert(validation.errors.join("\n"));
               return;
             }
             await onSubmit(data);
-          };
-          roleSelect.addEventListener("change", (e) => {
-            console.log("Role changed to:", roleSelect.value);
-            const selectedRole = roleSelect.value;
-            if (selectedRole === "new_role") {
-              newRoleInputs.classList.remove("hidden");
-              this.updateProjectOptions(projectSelect, "new_role");
-            } else {
-              newRoleInputs.classList.add("hidden");
-              this.updateProjectOptions(projectSelect, selectedRole);
-            }
           });
         }
         updateProjectOptions(select, roleId, selectedId) {
           select.innerHTML = "";
-          if (!roleId || roleId !== "new_role" && roleId === void 0) {
+          if (!roleId) {
             const option = document.createElement("option");
             option.textContent = "Select a role first";
             option.disabled = true;
             select.appendChild(option);
             return;
           }
-          if (roleId === "new_role") {
-            const newOption2 = document.createElement("option");
-            newOption2.value = "new_project";
-            newOption2.textContent = "+ New Project";
-            select.appendChild(newOption2);
-            return;
-          }
-          const noProjectOption = document.createElement("option");
-          noProjectOption.value = `no_project_${roleId}`;
-          noProjectOption.textContent = "No Project";
-          noProjectOption.selected = selectedId === `no_project_${roleId}`;
-          select.appendChild(noProjectOption);
           this.projects.filter((p) => p.roleId === roleId).forEach((project) => {
             const option = document.createElement("option");
             option.value = project.id;
@@ -1536,38 +846,38 @@ var Resuum = (() => {
             option.selected = project.id === selectedId;
             select.appendChild(option);
           });
-          const newOption = document.createElement("option");
-          newOption.value = "new_project";
-          newOption.textContent = "+ New Project";
-          select.appendChild(newOption);
+          if (this.projects.filter((p) => p.roleId === roleId).length === 0) {
+            const option = document.createElement("option");
+            option.textContent = "No projects available";
+            option.disabled = true;
+            select.appendChild(option);
+          }
         }
-        updateQualityPreview(form, text) {
-          const preview = form.querySelector(".quality-preview");
-          const features = this.validator.analyzeFeatures(text);
-          preview.innerHTML = "";
-          [
-            { key: "hasNumbers", label: "Contains Numbers", active: features.hasNumbers },
-            { key: "actionVerb", label: "Strong Action Verb", active: features.actionVerb },
-            { key: "lengthOk", label: "Good Length", active: features.lengthOk }
-          ].forEach((indicator) => {
-            const badge = createSafeElement(
-              "span",
-              indicator.label,
-              `quality-indicator ${indicator.active ? "quality-indicator--active" : "quality-indicator--inactive"}`
-            );
-            preview.appendChild(badge);
-          });
+        /**
+         * Update character counter (implemented locally)
+         */
+        updateCharCounter(text, counter) {
+          const length = text.length;
+          const maxLength = 500;
+          setSafeTextContent(counter, `${length}/${maxLength} characters`);
+          if (length > maxLength * 0.9) {
+            counter.className = "char-counter char-counter--warning";
+          } else if (length > maxLength) {
+            counter.className = "char-counter char-counter--error";
+          } else {
+            counter.className = "char-counter";
+          }
         }
         getFormData(form) {
           return {
             roleId: form.querySelector("#bullet-role").value,
             projectId: form.querySelector("#bullet-project").value,
-            text: form.querySelector("#bullet-text").value.trim(),
-            newRoleTitle: form.querySelector("#new-role-title")?.value.trim(),
-            newRoleCompany: form.querySelector("#new-role-company")?.value.trim(),
-            newProjectName: form.querySelector("#new-project-name")?.value.trim(),
-            newProjectDescription: form.querySelector("#new-project-description")?.value.trim()
+            text: form.querySelector("#bullet-text").value.trim()
           };
+        }
+        validateFormData(data) {
+          const validator = getBulletValidator();
+          return validator.validateBullet(data);
         }
         async loadData() {
           [this.roles, this.projects] = await Promise.all([
@@ -1581,118 +891,166 @@ var Resuum = (() => {
   });
 
   // src/ui/bullet-data-service.ts
-  var BulletDataService;
+  function getBulletDataService() {
+    if (!globalBulletDataService) {
+      globalBulletDataService = new BulletDataService();
+    }
+    return globalBulletDataService;
+  }
+  var BulletDataService, globalBulletDataService;
   var init_bullet_data_service = __esm({
     "src/ui/bullet-data-service.ts"() {
       "use strict";
       init_transactions();
-      init_embedding_state();
-      init_uuid();
       BulletDataService = class {
-        roles = [];
-        projects = [];
-        async getBullet(bulletId) {
-          return getById("bullets", bulletId);
+        /**
+         * Get all bullet points
+         */
+        async getAllBullets() {
+          return getAll("bullets");
         }
-        async createBullet(formData) {
-          const roleId = await this.ensureRole(formData);
-          const projectId = await this.ensureProject(formData, roleId);
+        /**
+         * Get bullet points by role
+         */
+        async getBulletsByRole(roleId) {
+          const allBullets = await this.getAllBullets();
+          return allBullets.filter((bullet) => bullet.roleId === roleId);
+        }
+        /**
+         * Get bullet points by project
+         */
+        async getBulletsByProject(projectId) {
+          const allBullets = await this.getAllBullets();
+          return allBullets.filter((bullet) => bullet.projectId === projectId);
+        }
+        /**
+         * Create new bullet point
+         */
+        async createBullet(bulletData) {
           const bullet = {
-            id: createId("bullet"),
-            roleId,
-            projectId,
-            text: formData.text,
-            source: "manual",
-            normalizedFingerprint: `temp_${Date.now()}`,
-            features: this.analyzeFeatures(formData.text),
-            embeddingState: "pending",
-            retryCount: 0,
+            id: `bullet_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            roleId: bulletData.roleId,
+            projectId: bulletData.projectId,
+            text: bulletData.text.trim(),
+            source: bulletData.source || "manual",
             createdAt: Date.now(),
             lastModified: Date.now()
           };
-          await create("bullets", bullet);
-          await queueBulletForEmbedding(bullet.id);
+          return create("bullets", bullet);
         }
-        async updateBullet(bulletId, formData) {
+        /**
+         * Update bullet point
+         */
+        async updateBullet(bulletId, updates) {
           const existingBullet = await getById("bullets", bulletId);
-          if (!existingBullet) throw new Error("Bullet not found");
-          const roleId = await this.ensureRole(formData);
-          const projectId = await this.ensureProject(formData, roleId);
+          if (!existingBullet) {
+            throw new Error(`Bullet with id ${bulletId} not found`);
+          }
           const updatedBullet = {
             ...existingBullet,
-            text: formData.text,
-            roleId,
-            projectId,
-            features: this.analyzeFeatures(formData.text),
+            ...updates,
             lastModified: Date.now()
           };
-          await update("bullets", updatedBullet);
-          if (existingBullet.text !== formData.text) {
-            await markBulletChanged(bulletId);
+          if (updates.text) {
+            updatedBullet.text = updates.text.trim();
           }
+          return update("bullets", updatedBullet);
         }
-        async ensureRole(data) {
-          if (data.roleId !== "new_role") return data.roleId;
-          await this.loadRoles();
-          const newRole = {
-            id: createId("role"),
-            title: data.newRoleTitle,
-            company: data.newRoleCompany,
-            orderIndex: this.roles.length,
-            bulletsLimit: 3,
-            startDate: (/* @__PURE__ */ new Date()).toISOString().slice(0, 7),
-            endDate: null
-          };
-          await create("roles", newRole);
-          this.roles.push(newRole);
-          return newRole.id;
+        /**
+         * Delete bullet point
+         */
+        async deleteBullet(bulletId) {
+          await deleteById("bullets", bulletId);
         }
-        async ensureProject(data, roleId) {
-          if (data.projectId !== "new_project") {
-            return data.projectId || `no_project_${roleId}`;
+        /**
+         * Get bullets with role and project context
+         */
+        async getBulletsWithContext() {
+          const [bullets, roles, projects] = await Promise.all([
+            this.getAllBullets(),
+            getAll("roles"),
+            getAll("projects")
+          ]);
+          return bullets.map((bullet) => ({
+            bullet,
+            role: roles.find((r) => r.id === bullet.roleId) || null,
+            project: projects.find((p) => p.id === bullet.projectId) || null
+          }));
+        }
+        /**
+         * Validate bullet point data
+         */
+        validateBulletData(text, roleId, projectId) {
+          const errors = [];
+          if (!text || text.trim().length === 0) {
+            errors.push("Bullet point text is required");
           }
-          await this.loadProjects();
-          const newProject = {
-            id: createId("project"),
-            roleId,
-            name: data.newProjectName,
-            description: data.newProjectDescription || "",
-            centroidVector: new ArrayBuffer(0),
-            vectorDimensions: 0,
-            bulletCount: 0,
-            embeddingVersion: 1,
-            createdAt: Date.now(),
-            updatedAt: Date.now()
-          };
-          await create("projects", newProject);
-          this.projects.push(newProject);
-          return newProject.id;
-        }
-        analyzeFeatures(text) {
-          const wordCount = text.trim().split(/\s+/).length;
+          if (text && text.trim().length < 10) {
+            errors.push("Bullet point should be at least 10 characters long");
+          }
+          if (text && text.trim().length > 500) {
+            errors.push("Bullet point should be less than 500 characters");
+          }
+          if (!roleId) {
+            errors.push("Role is required");
+          }
+          if (!projectId) {
+            errors.push("Project is required");
+          }
           return {
-            hasNumbers: /\d/.test(text),
-            actionVerb: /^(led|managed|developed|created|built|achieved|analyzed|designed|implemented)/i.test(text.trim()),
-            lengthOk: wordCount >= 5 && wordCount <= 22
+            isValid: errors.length === 0,
+            errors
           };
         }
-        async loadRoles() {
-          if (this.roles.length === 0) {
-            this.roles = await getAll("roles");
-          }
+        /**
+         * Search bullets by text
+         */
+        async searchBullets(searchTerm) {
+          const allBullets = await this.getAllBullets();
+          const lowerSearchTerm = searchTerm.toLowerCase();
+          return allBullets.filter(
+            (bullet) => bullet.text.toLowerCase().includes(lowerSearchTerm)
+          );
         }
-        async loadProjects() {
-          if (this.projects.length === 0) {
-            this.projects = await getAll("projects");
-          }
+        /**
+         * Get bullet statistics
+         */
+        async getBulletStats() {
+          const bullets = await this.getAllBullets();
+          const bulletsByRole = bullets.reduce((acc, bullet) => {
+            const existing = acc.find((item) => item.roleId === bullet.roleId);
+            if (existing) {
+              existing.count++;
+            } else {
+              acc.push({ roleId: bullet.roleId, count: 1 });
+            }
+            return acc;
+          }, []);
+          const bulletsByProject = bullets.reduce((acc, bullet) => {
+            const existing = acc.find((item) => item.projectId === bullet.projectId);
+            if (existing) {
+              existing.count++;
+            } else {
+              acc.push({ projectId: bullet.projectId, count: 1 });
+            }
+            return acc;
+          }, []);
+          return {
+            totalBullets: bullets.length,
+            bulletsByRole,
+            bulletsByProject
+          };
         }
       };
+      globalBulletDataService = null;
     }
   });
 
   // src/ui/bullet-editor.ts
   function getBulletEditor() {
-    if (!globalBulletEditor) globalBulletEditor = new BulletEditor();
+    if (!globalBulletEditor) {
+      globalBulletEditor = new BulletEditor();
+    }
     return globalBulletEditor;
   }
   var BulletEditor, globalBulletEditor;
@@ -1705,10 +1063,8 @@ var Resuum = (() => {
       BulletEditor = class {
         modal = null;
         formBuilder;
-        dataService;
         constructor() {
           this.formBuilder = new BulletFormBuilder();
-          this.dataService = new BulletDataService();
         }
         async showAddModal(defaultRoleId, defaultProjectId, onSave) {
           await this.showModal({
@@ -1719,7 +1075,9 @@ var Resuum = (() => {
           }, false, onSave);
         }
         async showEditModal(bulletId, onSave) {
-          const bullet = await this.dataService.getBullet(bulletId);
+          const dataService = getBulletDataService();
+          const bullets = await dataService.getAllBullets();
+          const bullet = bullets.find((b) => b.id === bulletId);
           if (!bullet) throw new Error("Bullet not found");
           await this.showModal({
             title: "Edit Bullet Point",
@@ -1756,36 +1114,103 @@ var Resuum = (() => {
         showModalElement() {
           const mainContent = document.querySelector(".main-content") || document.body;
           mainContent.appendChild(this.modal);
-          console.log("Modal added to:", mainContent);
-          console.log("Modal in DOM:", document.contains(this.modal));
-          const textInput = this.modal.querySelector("#bullet-text");
-          console.log("Text input found:", textInput);
-          console.log("Text input disabled:", textInput.disabled);
           setTimeout(() => {
-            textInput.focus();
-            console.log("Focused on text input");
+            const firstInput = this.modal.querySelector("input, textarea");
+            firstInput?.focus();
           }, 100);
         }
         async handleSubmit(data, isEdit, bulletId, onSave) {
           try {
+            const dataService = getBulletDataService();
             if (isEdit && bulletId) {
-              await this.dataService.updateBullet(bulletId, data);
+              await dataService.updateBullet(bulletId, {
+                text: data.text,
+                projectId: data.projectId
+              });
             } else {
-              await this.dataService.createBullet(data);
+              await dataService.createBullet({
+                roleId: data.roleId,
+                projectId: data.projectId,
+                text: data.text,
+                source: "manual"
+              });
             }
             this.hideModal();
-            onSave?.();
+            if (onSave) {
+              onSave();
+            }
           } catch (error) {
+            console.error("Failed to save bullet:", error);
             alert("Failed to save bullet point");
           }
         }
         hideModal() {
           this.modal?.remove();
           this.modal = null;
-          document.onkeydown = null;
         }
       };
       globalBulletEditor = null;
+    }
+  });
+
+  // src/utils/uuid.ts
+  function generateUUID() {
+    if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+      const bytes = new Uint8Array(16);
+      crypto.getRandomValues(bytes);
+      if (bytes.length < 16) {
+        throw new Error("Failed to generate sufficient random bytes");
+      }
+      bytes[6] = (bytes[6] ?? 0) & 15 | 64;
+      bytes[8] = (bytes[8] ?? 0) & 63 | 128;
+      const hex = Array.from(bytes).map((b) => (b ?? 0).toString(16).padStart(2, "0")).join("");
+      return [
+        hex.slice(0, 8),
+        hex.slice(8, 12),
+        hex.slice(12, 16),
+        hex.slice(16, 20),
+        hex.slice(20, 32)
+      ].join("-");
+    } else {
+      return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+        const r = Math.random() * 16 | 0;
+        const v = c === "x" ? r : r & 3 | 8;
+        return v.toString(16);
+      });
+    }
+  }
+  function generateULID() {
+    const timestamp = Date.now();
+    const timestampPart = timestamp.toString(36).padStart(10, "0");
+    const randomPart = generateRandomString(16);
+    return `${timestampPart}_${randomPart}`;
+  }
+  function generateRandomString(length) {
+    const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
+    let result = "";
+    if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+      const bytes = new Uint8Array(length);
+      crypto.getRandomValues(bytes);
+      for (let i = 0; i < Math.min(bytes.length, length); i++) {
+        const byteValue = bytes[i] ?? 0;
+        result += chars[byteValue % chars.length] ?? "0";
+      }
+    } else {
+      for (let i = 0; i < length; i++) {
+        result += chars[Math.floor(Math.random() * chars.length)] ?? "0";
+      }
+    }
+    return result;
+  }
+  function createId(type = "bullet") {
+    if (type === "bullet" || type === "embed_queue") {
+      return generateULID();
+    }
+    return generateUUID();
+  }
+  var init_uuid = __esm({
+    "src/utils/uuid.ts"() {
+      "use strict";
     }
   });
 
@@ -1874,7 +1299,6 @@ var Resuum = (() => {
         /**
          * Create form
          */
-        // Replace the createForm method with this simpler version:
         createForm(config) {
           const form = document.createElement("form");
           form.className = "project-form";
@@ -1931,40 +1355,6 @@ var Resuum = (() => {
           return group;
         }
         /**
-         * Create name input
-         */
-        createNameInput(defaultName) {
-          const group = createSafeElement("div", "", "form-group");
-          const label = createSafeElement("label", "Project Name", "form-label");
-          const input = document.createElement("input");
-          input.id = "project-name";
-          input.type = "text";
-          input.className = "form-input";
-          input.placeholder = "Enter project name...";
-          input.value = defaultName;
-          input.disabled = false;
-          group.append(label, input);
-          return group;
-        }
-        /**
-         * Create description input
-         */
-        createDescriptionInput(defaultDescription) {
-          const group = createSafeElement("div", "", "form-group");
-          const label = createSafeElement("label", "Description", "form-label");
-          const textarea = document.createElement("textarea");
-          const counter = createSafeElement("div", "", "char-counter");
-          textarea.id = "project-description";
-          textarea.className = "form-textarea";
-          textarea.placeholder = "Enter project description (optional)...";
-          textarea.rows = 3;
-          textarea.value = defaultDescription;
-          textarea.disabled = false;
-          this.updateCharCounter(defaultDescription, counter);
-          group.append(label, textarea, counter);
-          return group;
-        }
-        /**
          * Create form buttons
          */
         createButtons(isEdit) {
@@ -1987,12 +1377,6 @@ var Resuum = (() => {
         showModalElement() {
           const mainContent = document.querySelector(".main-content") || document.body;
           mainContent.appendChild(this.modal);
-          const escapeHandler = (e) => {
-            if (e.key === "Escape") {
-              this.hideModal();
-            }
-          };
-          document.addEventListener("keydown", escapeHandler);
           setTimeout(() => {
             const allInputs = this.modal.querySelectorAll("input, textarea");
             allInputs.forEach((input) => {
@@ -2063,7 +1447,7 @@ var Resuum = (() => {
           };
         }
         /**
-         * Create new project
+         * Create new project (FIXED - removed embedding fields)
          */
         async createProject(formData) {
           const project = {
@@ -2071,10 +1455,7 @@ var Resuum = (() => {
             roleId: formData.roleId,
             name: formData.name,
             description: formData.description,
-            centroidVector: new ArrayBuffer(0),
-            vectorDimensions: 0,
             bulletCount: 0,
-            embeddingVersion: 1,
             createdAt: Date.now(),
             updatedAt: Date.now()
           };
@@ -2098,21 +1479,6 @@ var Resuum = (() => {
           await update("projects", updatedProject);
         }
         /**
-         * Update character counter
-         */
-        updateCharCounter(text, counter) {
-          const length = text.length;
-          const maxLength = 500;
-          setSafeTextContent(counter, `${length}/${maxLength} characters`);
-          if (length > maxLength * 0.9) {
-            counter.className = "char-counter char-counter--warning";
-          } else if (length > maxLength) {
-            counter.className = "char-counter char-counter--error";
-          } else {
-            counter.className = "char-counter";
-          }
-        }
-        /**
          * Hide modal
          */
         hideModal() {
@@ -2133,7 +1499,6 @@ var Resuum = (() => {
     "src/ui/data-management.ts"() {
       "use strict";
       init_transactions();
-      init_embedding_state();
       init_xss_safe_rendering();
       init_bullet_editor();
       init_project_editor();
@@ -2215,7 +1580,7 @@ var Resuum = (() => {
           const table = createSafeElement("table", "", "bullets-table data-table");
           const thead = createSafeElement("thead");
           const headerRow = createSafeElement("tr");
-          ["Role", "Project", "Bullet Text", "State", "Quality", "Modified", "Actions"].forEach((text) => {
+          ["Role", "Project", "Bullet Text", "Modified", "Actions"].forEach((text) => {
             const th = createSafeElement("th", text);
             headerRow.appendChild(th);
           });
@@ -2232,7 +1597,7 @@ var Resuum = (() => {
             const emptyCell = document.createElement("td");
             emptyCell.textContent = "No bullet points found";
             emptyCell.className = "empty-state";
-            emptyCell.colSpan = 7;
+            emptyCell.colSpan = 5;
             emptyRow.appendChild(emptyCell);
             tbody.appendChild(emptyRow);
           }
@@ -2243,11 +1608,7 @@ var Resuum = (() => {
          * Create a single bullet row
          */
         async createBulletRow(bullet) {
-          const row = createSafeElement(
-            "tr",
-            "",
-            `bullet-row bullet-row--${bullet.embeddingState}`
-          );
+          const row = createSafeElement("tr", "", "bullet-row");
           const role = this.roles.find((r) => r.id === bullet.roleId);
           const roleCell = createSafeElement(
             "td",
@@ -2259,19 +1620,9 @@ ${role.company}` : "Unknown Role",
           const projectSelect = await this.createProjectSelect(bullet);
           projectCell.appendChild(projectSelect);
           const textCell = createSafeElement("td", "", "text-cell");
-          const bulletElement = renderBulletPoint(bullet.text, bullet.embeddingState);
-          if (bullet.text.length > 80) {
-            const truncatedText = bullet.text.substring(0, 80) + "...";
-            setSafeTextContent(bulletElement.querySelector(".bullet-text") || bulletElement, truncatedText);
-            bulletElement.title = bullet.text;
-          }
-          textCell.appendChild(bulletElement);
-          const stateCell = createSafeElement("td", "", "state-cell");
-          const stateBadge = this.createStateBadge(bullet);
-          stateCell.appendChild(stateBadge);
-          const qualityCell = createSafeElement("td", "", "quality-cell");
-          const qualityBadges = this.createQualityBadges(bullet);
-          qualityCell.appendChild(qualityBadges);
+          const truncatedText = bullet.text.length > 80 ? bullet.text.substring(0, 80) + "..." : bullet.text;
+          setSafeTextContent(textCell, truncatedText);
+          textCell.title = bullet.text;
           const modifiedCell = createSafeElement(
             "td",
             new Date(bullet.lastModified).toLocaleDateString(),
@@ -2287,8 +1638,6 @@ ${role.company}` : "Unknown Role",
           row.appendChild(roleCell);
           row.appendChild(projectCell);
           row.appendChild(textCell);
-          row.appendChild(stateCell);
-          row.appendChild(qualityCell);
           row.appendChild(modifiedCell);
           row.appendChild(actionsCell);
           return row;
@@ -2310,69 +1659,16 @@ ${role.company}` : "Unknown Role",
           const roleProjects = this.projects.filter(
             (p) => p.roleId === bullet.roleId && p.id !== bullet.projectId
           );
-          for (const project of roleProjects) {
+          roleProjects.forEach((project) => {
             const option = document.createElement("option");
             option.value = project.id;
             option.textContent = project.name;
             select.appendChild(option);
-          }
-          select.addEventListener("change", async (e) => {
-            const newProjectId = e.target.value;
-            await this.moveBulletToProject(bullet.id, newProjectId);
+          });
+          select.addEventListener("change", () => {
+            this.moveBulletToProject(bullet.id, select.value);
           });
           return select;
-        }
-        /**
-         * Create embedding state badge
-         */
-        createStateBadge(bullet) {
-          const badge = createSafeElement(
-            "span",
-            "",
-            `state-badge state-badge--${bullet.embeddingState}`
-          );
-          const stateLabels = {
-            ready: "\u2713 Ready",
-            pending: "\u23F3 Processing",
-            stale: "\u26A0 Needs Update",
-            failed: "\u2717 Failed"
-          };
-          setSafeTextContent(badge, stateLabels[bullet.embeddingState] || "? Unknown");
-          if (bullet.embeddingState === "failed" && bullet.retryCount > 0) {
-            badge.title = `Failed after ${bullet.retryCount} retries`;
-          }
-          return badge;
-        }
-        /**
-         * Create quality feature badges
-         */
-        createQualityBadges(bullet) {
-          const container = createSafeElement("div", "", "quality-badges");
-          const features = [
-            { key: "hasNumbers", label: "#", title: "Contains numbers" },
-            { key: "actionVerb", label: "V", title: "Strong action verb" },
-            { key: "lengthOk", label: "L", title: "Good length" }
-          ];
-          for (const feature of features) {
-            const badge = createSafeElement(
-              "span",
-              feature.label,
-              `quality-badge ${bullet.features[feature.key] ? "quality-badge--active" : "quality-badge--inactive"}`
-            );
-            badge.title = feature.title;
-            container.appendChild(badge);
-          }
-          return container;
-        }
-        /**
-         * Load data from storage
-         */
-        async loadData() {
-          [this.bullets, this.projects, this.roles] = await Promise.all([
-            getAll("bullets"),
-            getAll("projects"),
-            getAll("roles")
-          ]);
         }
         /**
          * Get filtered and sorted bullets
@@ -2380,32 +1676,34 @@ ${role.company}` : "Unknown Role",
         getFilteredAndSortedBullets() {
           let filtered = this.bullets;
           if (this.filterText) {
-            const filter = this.filterText.toLowerCase();
-            filtered = filtered.filter(
-              (bullet) => bullet.text.toLowerCase().includes(filter)
-            );
+            const filterLower = this.filterText.toLowerCase();
+            filtered = filtered.filter((bullet) => {
+              const role = this.roles.find((r) => r.id === bullet.roleId);
+              const project = this.projects.find((p) => p.id === bullet.projectId);
+              return bullet.text.toLowerCase().includes(filterLower) || role?.title.toLowerCase().includes(filterLower) || role?.company.toLowerCase().includes(filterLower) || project?.name.toLowerCase().includes(filterLower);
+            });
           }
           filtered.sort((a, b) => {
             let compareValue = 0;
             switch (this.sortBy) {
+              case "role":
+                const roleA = this.roles.find((r) => r.id === a.roleId)?.title || "";
+                const roleB = this.roles.find((r) => r.id === b.roleId)?.title || "";
+                compareValue = roleA.localeCompare(roleB);
+                break;
+              case "project":
+                const projectA = this.projects.find((p) => p.id === a.projectId)?.name || "";
+                const projectB = this.projects.find((p) => p.id === b.projectId)?.name || "";
+                compareValue = projectA.localeCompare(projectB);
+                break;
               case "created":
                 compareValue = a.createdAt - b.createdAt;
                 break;
               case "modified":
                 compareValue = a.lastModified - b.lastModified;
                 break;
-              case "role":
-                const roleA = this.roles.find((r) => r.id === a.roleId);
-                const roleB = this.roles.find((r) => r.id === b.roleId);
-                compareValue = (roleA?.orderIndex || 0) - (roleB?.orderIndex || 0);
-                break;
-              case "project":
-                const projectA = this.projects.find((p) => p.id === a.projectId);
-                const projectB = this.projects.find((p) => p.id === b.projectId);
-                compareValue = (projectA?.name || "").localeCompare(projectB?.name || "");
-                break;
             }
-            return this.sortOrder === "desc" ? -compareValue : compareValue;
+            return this.sortOrder === "asc" ? compareValue : -compareValue;
           });
           return filtered;
         }
@@ -2422,7 +1720,6 @@ ${role.company}` : "Unknown Role",
               lastModified: Date.now()
             };
             await update("bullets", updatedBullet);
-            await markBulletChanged(bulletId);
             await this.render();
           } catch (error) {
             console.error("Failed to move bullet:", error);
@@ -2433,14 +1730,24 @@ ${role.company}` : "Unknown Role",
          * Show add bullet modal
          */
         showAddBulletModal() {
-          const editor = getBulletEditor();
-          editor.showAddModal("role_mckinsey_sc", void 0, () => {
-            this.render();
-          });
+          try {
+            const editor = getBulletEditor();
+            editor.showAddModal(void 0, void 0, () => {
+              this.render();
+            });
+          } catch (error) {
+            console.error("Error showing add modal:", error);
+            alert("Error opening bullet editor: " + (error instanceof Error ? error.message : "Unknown error"));
+          }
         }
         editBullet(bulletId) {
-          const editor = getBulletEditor();
-          editor.showEditModal(bulletId, () => this.render());
+          try {
+            const editor = getBulletEditor();
+            editor.showEditModal(bulletId, () => this.render());
+          } catch (error) {
+            console.error("Error editing bullet:", error);
+            alert("Error opening bullet editor: " + (error instanceof Error ? error.message : "Unknown error"));
+          }
         }
         /**
          * Delete bullet
@@ -2456,6 +1763,16 @@ ${role.company}` : "Unknown Role",
             console.error("Failed to delete bullet:", error);
             alert("Failed to delete bullet point");
           }
+        }
+        /**
+         * Load data from storage
+         */
+        async loadData() {
+          [this.bullets, this.projects, this.roles] = await Promise.all([
+            getAll("bullets"),
+            getAll("projects"),
+            getAll("roles")
+          ]);
         }
       };
       ProjectsTable = class {
@@ -2491,20 +1808,11 @@ ${role.company}` : "Unknown Role",
          * Create projects table
          */
         createTable() {
-          const table = createSafeElement("table", "", "bullets-table data-table");
+          const table = createSafeElement("table", "", "projects-table data-table");
           const thead = createSafeElement("thead");
           const headerRow = createSafeElement("tr");
-          ["Role", "Project Name", "Description", "# Bullets", "Embedding Status", "Actions"].forEach((text) => {
+          ["Role", "Project Name", "Description", "# Bullets", "Actions"].forEach((text) => {
             const th = createSafeElement("th", text);
-            if (text === "Description") {
-              th.style.width = "40%";
-            } else if (text === "Role") {
-              th.style.width = "20%";
-            } else if (text === "Project Name") {
-              th.style.width = "15%";
-            } else {
-              th.style.width = "8%";
-            }
             headerRow.appendChild(th);
           });
           thead.appendChild(headerRow);
@@ -2519,7 +1827,7 @@ ${role.company}` : "Unknown Role",
             const emptyCell = document.createElement("td");
             emptyCell.textContent = "No projects found";
             emptyCell.className = "empty-state";
-            emptyCell.colSpan = 6;
+            emptyCell.colSpan = 5;
             emptyRow.appendChild(emptyCell);
             tbody.appendChild(emptyRow);
           }
@@ -2540,24 +1848,10 @@ ${role.company}` : "Unknown Role"
           const nameCell = createSafeElement("td", project.name, "project-name");
           const descCell = createSafeElement(
             "td",
-            project.description.length > 60 ? project.description.substring(0, 60) + "..." : project.description
+            project.description && project.description.length > 60 ? project.description.substring(0, 60) + "..." : project.description || "No description"
           );
-          if (project.description.length > 60) {
-            descCell.title = project.description;
-          }
-          const projectBullets = this.bullets.filter((b) => b.projectId === project.id);
-          const actualCount = projectBullets.length;
-          const storedCount = project.bulletCount;
-          const countCell = createSafeElement("td", "", "count-cell");
-          const countText = createSafeElement("span", actualCount.toString());
-          if (actualCount !== storedCount) {
-            countText.className = "count-mismatch";
-            countText.title = `Stored count: ${storedCount}, Actual: ${actualCount}`;
-          }
-          countCell.appendChild(countText);
-          const statusCell = createSafeElement("td", "", "status-cell");
-          const statusBadge = this.createEmbeddingStatusBadge(project, projectBullets);
-          statusCell.appendChild(statusBadge);
+          const bulletCount = this.bullets.filter((b) => b.projectId === project.id).length;
+          const countCell = createSafeElement("td", bulletCount.toString());
           const actionsCell = createSafeElement("td", "", "actions-cell");
           const editButton = createSafeElement("button", "Edit", "btn btn-sm");
           const deleteButton = createSafeElement("button", "Delete", "btn btn-sm btn-danger");
@@ -2569,74 +1863,32 @@ ${role.company}` : "Unknown Role"
           row.appendChild(nameCell);
           row.appendChild(descCell);
           row.appendChild(countCell);
-          row.appendChild(statusCell);
           row.appendChild(actionsCell);
           return row;
-        }
-        /**
-         * Create embedding status badge for project
-         */
-        createEmbeddingStatusBadge(project, bullets) {
-          const badge = createSafeElement("div", "", "embedding-status");
-          if (bullets.length === 0) {
-            badge.className += " embedding-status--empty";
-            setSafeTextContent(badge, "No bullets");
-            return badge;
-          }
-          const stateCounts = {
-            ready: 0,
-            pending: 0,
-            stale: 0,
-            failed: 0
-          };
-          bullets.forEach((bullet) => {
-            stateCounts[bullet.embeddingState]++;
-          });
-          if (stateCounts.failed > 0) {
-            badge.className += " embedding-status--failed";
-            setSafeTextContent(badge, `${stateCounts.failed} failed`);
-          } else if (stateCounts.pending > 0) {
-            badge.className += " embedding-status--pending";
-            setSafeTextContent(badge, `${stateCounts.pending} processing`);
-          } else if (stateCounts.stale > 0) {
-            badge.className += " embedding-status--stale";
-            setSafeTextContent(badge, `${stateCounts.stale} stale`);
-          } else {
-            badge.className += " embedding-status--ready";
-            setSafeTextContent(badge, "All ready");
-          }
-          const hasValidCentroid = project.centroidVector.byteLength > 0;
-          if (!hasValidCentroid) {
-            badge.className += " embedding-status--no-centroid";
-            badge.title = "Project centroid needs calculation";
-          }
-          return badge;
-        }
-        /**
-         * Load data from storage
-         */
-        async loadData() {
-          [this.projects, this.roles, this.bullets] = await Promise.all([
-            getAll("projects"),
-            getAll("roles"),
-            getAll("bullets")
-          ]);
         }
         /**
          * Show add project modal
          */
         showAddProjectModal() {
-          const editor = getProjectEditor();
-          const firstRole = this.roles[0];
-          const defaultRoleId = firstRole ? firstRole.id : void 0;
-          editor.showAddModal(defaultRoleId, () => this.render());
+          try {
+            const editor = getProjectEditor();
+            editor.showAddModal(void 0, () => this.render());
+          } catch (error) {
+            console.error("Error showing add project modal:", error);
+            alert("Error opening project editor: " + (error instanceof Error ? error.message : "Unknown error"));
+          }
         }
         /**
          * Edit project
          */
         editProject(projectId) {
-          const editor = getProjectEditor();
-          editor.showEditModal(projectId, () => this.render());
+          try {
+            const editor = getProjectEditor();
+            editor.showEditModal(projectId, () => this.render());
+          } catch (error) {
+            console.error("Error editing project:", error);
+            alert("Error opening project editor: " + (error instanceof Error ? error.message : "Unknown error"));
+          }
         }
         /**
          * Delete project
@@ -2646,7 +1898,7 @@ ${role.company}` : "Unknown Role"
           if (!project) return;
           const projectBullets = this.bullets.filter((b) => b.projectId === projectId);
           if (projectBullets.length > 0) {
-            const confirmMessage = `This project has ${projectBullets.length} bullet points. Deleting it will move them to "No Project". Continue?`;
+            const confirmMessage = `This project has ${projectBullets.length} bullet points. Deleting it will remove them. Continue?`;
             if (!confirm(confirmMessage)) {
               return;
             }
@@ -2661,6 +1913,16 @@ ${role.company}` : "Unknown Role"
             console.error("Failed to delete project:", error);
             alert("Failed to delete project");
           }
+        }
+        /**
+         * Load data from storage
+         */
+        async loadData() {
+          [this.projects, this.roles, this.bullets] = await Promise.all([
+            getAll("projects"),
+            getAll("roles"),
+            getAll("bullets")
+          ]);
         }
       };
     }
@@ -2680,36 +1942,43 @@ ${role.company}` : "Unknown Role"
       ExperienceTab = class {
         container;
         currentView = "bullets";
-        bulletsTable;
-        projectsTable;
+        bulletsTable = null;
+        projectsTable = null;
         constructor(container) {
           this.container = container;
-          const tableContainer = createSafeElement("div", "", "table-container");
-          this.bulletsTable = new BulletPointsTable(tableContainer);
-          this.projectsTable = new ProjectsTable(tableContainer);
+          console.log("ExperienceTab constructor called with container:", container);
         }
         /**
          * Render the experience tab content
          */
         async render() {
-          this.container.innerHTML = "";
-          const subNav = this.createSubNavigation();
-          const content = createSafeElement("div", "", "experience-content");
-          this.container.appendChild(subNav);
-          this.container.appendChild(content);
-          if (this.currentView === "bullets") {
-            await this.bulletsTable.render();
-            content.appendChild(this.bulletsTable["container"]);
-          } else {
-            await this.projectsTable.render();
-            content.appendChild(this.projectsTable["container"]);
+          console.log("ExperienceTab render() called");
+          try {
+            this.container.innerHTML = "";
+            const tabContent = createSafeElement("div", "", "experience-tab-content");
+            const subNav = this.createSubNavigation();
+            const contentArea = createSafeElement("div", "", "experience-content");
+            tabContent.appendChild(subNav);
+            tabContent.appendChild(contentArea);
+            this.container.appendChild(tabContent);
+            console.log("ExperienceTab basic structure created, rendering current view...");
+            await this.renderCurrentView(contentArea);
+            console.log("ExperienceTab render completed successfully");
+          } catch (error) {
+            console.error("Error in ExperienceTab.render():", error);
+            this.container.innerHTML = `
+        <div style="color: red; padding: 1rem; border: 1px solid #ff0000; border-radius: 4px;">
+          <h3>Experience Tab Render Error</h3>
+          <p>Error rendering experience tab: ${error instanceof Error ? error.message : "Unknown error"}</p>
+        </div>
+      `;
           }
         }
         /**
-         * Create sub-navigation between bullets and projects views
+         * Create sub-navigation between bullets and projects
          */
         createSubNavigation() {
-          const nav = createSafeElement("nav", "", "experience-subnav");
+          const nav = createSafeElement("div", "", "experience-subnav");
           const bulletsButton = createSafeElement(
             "button",
             "Bullet Points",
@@ -2721,16 +1990,81 @@ ${role.company}` : "Unknown Role"
             `subnav-button ${this.currentView === "projects" ? "subnav-button--active" : ""}`
           );
           bulletsButton.addEventListener("click", async () => {
-            this.currentView = "bullets";
-            await this.render();
+            if (this.currentView !== "bullets") {
+              this.currentView = "bullets";
+              await this.render();
+            }
           });
           projectsButton.addEventListener("click", async () => {
-            this.currentView = "projects";
-            await this.render();
+            if (this.currentView !== "projects") {
+              this.currentView = "projects";
+              await this.render();
+            }
           });
           nav.appendChild(bulletsButton);
           nav.appendChild(projectsButton);
           return nav;
+        }
+        /**
+         * Render the current view content
+         */
+        async renderCurrentView(contentArea) {
+          contentArea.innerHTML = "";
+          if (this.currentView === "bullets") {
+            await this.renderBulletsView(contentArea);
+          } else {
+            await this.renderProjectsView(contentArea);
+          }
+        }
+        /**
+         * Render bullets view - FIXED to actually use BulletPointsTable
+         */
+        async renderBulletsView(contentArea) {
+          try {
+            console.log("Rendering bullets view...");
+            const tableContainer = createSafeElement("div", "", "bullets-table-container");
+            contentArea.appendChild(tableContainer);
+            this.bulletsTable = new BulletPointsTable(tableContainer);
+            await this.bulletsTable.render();
+            console.log("Bullets view rendered successfully");
+          } catch (error) {
+            console.error("Error rendering bullets view:", error);
+            contentArea.innerHTML = `
+        <div style="padding: 1rem;">
+          <h3>Bullets</h3>
+          <p style="color: orange;">Error loading bullets table: ${error instanceof Error ? error.message : "Unknown error"}</p>
+          <p>The bullets functionality is being updated. Please check back soon.</p>
+        </div>
+      `;
+          }
+        }
+        /**
+         * Render projects view - FIXED to actually use ProjectsTable
+         */
+        async renderProjectsView(contentArea) {
+          try {
+            console.log("Rendering projects view...");
+            const tableContainer = createSafeElement("div", "", "projects-table-container");
+            contentArea.appendChild(tableContainer);
+            this.projectsTable = new ProjectsTable(tableContainer);
+            await this.projectsTable.render();
+            console.log("Projects view rendered successfully");
+          } catch (error) {
+            console.error("Error rendering projects view:", error);
+            contentArea.innerHTML = `
+        <div style="padding: 1rem;">
+          <h3>Projects</h3>
+          <p style="color: orange;">Error loading projects interface: ${error instanceof Error ? error.message : "Unknown error"}</p>
+          <p>The projects functionality is being updated. Please check back soon.</p>
+        </div>
+      `;
+          }
+        }
+        /**
+         * Refresh the current view
+         */
+        async refresh() {
+          await this.render();
         }
       };
     }
@@ -2738,6 +2072,1501 @@ ${role.company}` : "Unknown Role"
 
   // src/ui/app.ts
   init_xss_safe_rendering();
+
+  // src/ui/application-tab.ts
+  init_xss_safe_rendering();
+  var ApplicationTab = class {
+    container;
+    processingState = "idle";
+    lastResults = null;
+    lastError = null;
+    lastJobData = null;
+    constructor(container) {
+      this.container = container;
+    }
+    // ============================================================================
+    // Public Interface
+    // ============================================================================
+    /**
+     * Render the Application tab content
+     */
+    render() {
+      this.container.innerHTML = "";
+      const tabContainer = createSafeElement("div", "", "application-tab");
+      const inputSection = this.createJobInputSection();
+      tabContainer.appendChild(inputSection);
+      if (this.lastResults || this.processingState !== "idle") {
+        const resultsSection = this.createResultsSection();
+        tabContainer.appendChild(resultsSection);
+      }
+      this.container.appendChild(tabContainer);
+      this.addKeyboardShortcuts();
+    }
+    // ============================================================================
+    // Job Input Section
+    // ============================================================================
+    /**
+     * Create job input form section
+     */
+    createJobInputSection() {
+      const section = createSafeElement("section", "", "job-input-section");
+      const title = createSafeElement("h2", "New Job Application", "section-title");
+      const description = createSafeElement(
+        "p",
+        "Paste your job description below and get AI-powered resume recommendations.",
+        "section-description"
+      );
+      const form = this.createJobInputForm();
+      section.appendChild(title);
+      section.appendChild(description);
+      section.appendChild(form);
+      return section;
+    }
+    /**
+     * Create job input form
+     */
+    createJobInputForm() {
+      const form = createSafeElement("form", "", "job-input-form");
+      form.setAttribute("data-form", "job-input");
+      const titleGroup = this.createInputGroup(
+        "job-title",
+        "Job Title",
+        "text",
+        "e.g., Senior Product Manager"
+      );
+      const descriptionGroup = this.createTextareaGroup(
+        "job-description",
+        "Job Description",
+        "Paste the complete job description here..."
+      );
+      const submitButton = document.createElement("button");
+      submitButton.type = "submit";
+      submitButton.className = "form-submit";
+      submitButton.disabled = this.processingState === "processing";
+      setSafeTextContent(
+        submitButton,
+        this.processingState === "processing" ? "Generating..." : "Generate Recommendations"
+      );
+      form.appendChild(titleGroup);
+      form.appendChild(descriptionGroup);
+      form.appendChild(submitButton);
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        this.handleFormSubmission(form);
+      });
+      return form;
+    }
+    /**
+     * Create input group
+     */
+    createInputGroup(id, label, type, placeholder) {
+      const group = createSafeElement("div", "", "input-group");
+      const labelElement = createSafeElement("label", label, "input-label");
+      labelElement.setAttribute("for", id);
+      const input = document.createElement("input");
+      input.type = type;
+      input.id = id;
+      input.className = "form-input";
+      input.placeholder = placeholder;
+      group.appendChild(labelElement);
+      group.appendChild(input);
+      return group;
+    }
+    /**
+     * Create textarea group
+     */
+    createTextareaGroup(id, label, placeholder) {
+      const group = createSafeElement("div", "", "input-group");
+      const labelElement = createSafeElement("label", label, "input-label");
+      labelElement.setAttribute("for", id);
+      const textarea = document.createElement("textarea");
+      textarea.id = id;
+      textarea.className = "form-textarea";
+      textarea.placeholder = placeholder;
+      textarea.rows = 8;
+      group.appendChild(labelElement);
+      group.appendChild(textarea);
+      return group;
+    }
+    // ============================================================================
+    // Results Section
+    // ============================================================================
+    /**
+     * Create results display section
+     */
+    createResultsSection() {
+      const section = createSafeElement("section", "", "results-section");
+      const title = createSafeElement("h3", "Recommendations", "results-title");
+      section.appendChild(title);
+      if (this.processingState === "processing") {
+        const status = this.createProcessingStatus();
+        section.appendChild(status);
+      } else if (this.processingState === "complete" && this.lastResults) {
+        const summary = this.createResultsSummary();
+        const details = this.createResultsDetails();
+        const actions = this.createResultsActions();
+        section.appendChild(summary);
+        section.appendChild(details);
+        section.appendChild(actions);
+      } else if (this.processingState === "error") {
+        const error = this.createErrorDisplay();
+        section.appendChild(error);
+      }
+      return section;
+    }
+    /**
+     * Create processing status display
+     */
+    createProcessingStatus() {
+      const container = createSafeElement("div", "", "processing-status");
+      const spinner = createSafeElement("div", "", "spinner");
+      const status = createSafeElement("p", "Analyzing job description and finding best matches...", "status-text");
+      container.appendChild(spinner);
+      container.appendChild(status);
+      return container;
+    }
+    /**
+     * Create results summary box
+     */
+    createResultsSummary() {
+      if (!this.lastResults) return createSafeElement("div", "", "results-summary");
+      const summary = createSafeElement("div", "", "results-summary");
+      const { totalBullets, processingTime, projectsConsidered } = this.lastResults;
+      const summaryText = createSafeElement("p", "", "summary-text");
+      setSafeTextContent(
+        summaryText,
+        `Selected ${totalBullets} bullet points across ${projectsConsidered} projects. Processing time: ${processingTime}s`
+      );
+      summary.appendChild(summaryText);
+      return summary;
+    }
+    /**
+     * Create detailed results display
+     */
+    createResultsDetails() {
+      if (!this.lastResults) return createSafeElement("div", "", "results-details");
+      const details = createSafeElement("div", "", "results-details");
+      this.lastResults.roleResults.forEach((roleResult) => {
+        const roleSection = this.createRoleResultSection(roleResult);
+        details.appendChild(roleSection);
+      });
+      return details;
+    }
+    /**
+     * Create individual role result section
+     */
+    createRoleResultSection(roleResult) {
+      const section = createSafeElement("div", "", "role-result-section");
+      const header = createSafeElement("div", "", "role-header");
+      const title = createSafeElement("h4", "", "role-title");
+      setSafeTextContent(title, `${roleResult.roleTitle} - ${roleResult.selectedBullets.length} bullet points selected`);
+      const projectsInfo = createSafeElement("p", "", "projects-info");
+      setSafeTextContent(projectsInfo, `Projects considered: ${roleResult.projectsShortlisted.join(", ")}`);
+      header.appendChild(title);
+      header.appendChild(projectsInfo);
+      const bulletsList = createSafeElement("ul", "", "bullets-list");
+      const sortedBullets = [...roleResult.selectedBullets].sort((a, b) => b.relevance - a.relevance);
+      sortedBullets.forEach((bullet) => {
+        const listItem = createSafeElement("li", "", "bullet-item");
+        const bulletText = createSafeElement("span", bullet.text, "bullet-text");
+        const metadata = createSafeElement("span", "", "bullet-metadata");
+        setSafeTextContent(metadata, `(Relevance: ${Math.round(bullet.relevance * 100)}%, Project: ${bullet.projectName})`);
+        listItem.appendChild(bulletText);
+        listItem.appendChild(metadata);
+        bulletsList.appendChild(listItem);
+      });
+      section.appendChild(header);
+      section.appendChild(bulletsList);
+      return section;
+    }
+    /**
+     * Create results actions section
+     */
+    createResultsActions() {
+      const actions = createSafeElement("div", "", "results-actions");
+      const copyButton = document.createElement("button");
+      copyButton.className = "action-button action-button--primary";
+      setSafeTextContent(copyButton, "Copy All Bullets");
+      copyButton.addEventListener("click", () => this.copyResultsToClipboard());
+      const exportButton = document.createElement("button");
+      exportButton.className = "action-button action-button--secondary";
+      setSafeTextContent(exportButton, "Export to Plain Text");
+      exportButton.addEventListener("click", () => this.exportResultsToText());
+      const refreshButton = document.createElement("button");
+      refreshButton.className = "action-button action-button--tertiary";
+      setSafeTextContent(refreshButton, "Refresh Results");
+      refreshButton.addEventListener("click", () => this.refreshResults());
+      actions.appendChild(copyButton);
+      actions.appendChild(exportButton);
+      actions.appendChild(refreshButton);
+      return actions;
+    }
+    /**
+     * Create error display
+     */
+    createErrorDisplay() {
+      const container = createSafeElement("div", "", "error-display");
+      const title = createSafeElement("h4", "Generation Failed", "error-title");
+      const message = createSafeElement("p", this.lastError || "Unknown error occurred", "error-message");
+      const retryButton = document.createElement("button");
+      retryButton.className = "action-button action-button--primary";
+      setSafeTextContent(retryButton, "Try Again");
+      retryButton.addEventListener("click", () => this.retryGeneration());
+      container.appendChild(title);
+      container.appendChild(message);
+      container.appendChild(retryButton);
+      return container;
+    }
+    // ============================================================================
+    // Event Handlers
+    // ============================================================================
+    /**
+     * Handle form submission
+     */
+    async handleFormSubmission(form) {
+      try {
+        const formData = new FormData(form);
+        const jobTitle = formData.get("job-title");
+        const jobDescription = formData.get("job-description");
+        if (!jobDescription?.trim()) {
+          throw new Error("Job description is required");
+        }
+        await this.generateRecommendations(jobTitle, jobDescription);
+      } catch (error) {
+        this.processingState = "error";
+        this.lastError = error instanceof Error ? error.message : "Unknown error";
+        this.render();
+      }
+    }
+    /**
+     * Generate recommendations (placeholder for now)
+     */
+    async generateRecommendations(jobTitle, jobDescription) {
+      this.processingState = "processing";
+      this.lastError = null;
+      this.lastJobData = { title: jobTitle, description: jobDescription };
+      this.render();
+      try {
+        const startTime = Date.now();
+        await new Promise((resolve) => setTimeout(resolve, 2e3));
+        const result = await this.simulateRecommendationGeneration(jobTitle, jobDescription);
+        const processingTime = (Date.now() - startTime) / 1e3;
+        result.processingTime = processingTime;
+        this.lastResults = result;
+        this.processingState = "complete";
+        this.render();
+      } catch (error) {
+        this.processingState = "error";
+        this.lastError = error instanceof Error ? error.message : "Unknown error";
+        this.render();
+      }
+    }
+    /**
+     * Simulate recommendation generation (temporary)
+     */
+    async simulateRecommendationGeneration(jobTitle, jobDescription) {
+      return {
+        jobTitle,
+        totalBullets: 5,
+        processingTime: 2.1,
+        projectsConsidered: 8,
+        roleResults: [
+          {
+            roleTitle: "Senior Consultant",
+            projectsShortlisted: ["Global Telecom", "Healthcare M&A", "Retail Strategy"],
+            selectedBullets: [
+              {
+                text: "Led cross-functional team of 12 engineers to deliver enterprise software platform, resulting in 40% improvement in deployment efficiency",
+                relevance: 0.94,
+                projectName: "Global Telecom"
+              },
+              {
+                text: "Developed comprehensive market analysis framework, identifying $50M growth opportunity in emerging markets",
+                relevance: 0.89,
+                projectName: "Healthcare M&A"
+              }
+            ],
+            avgRelevance: 0.9
+          }
+        ]
+      };
+    }
+    /**
+     * Copy results to clipboard
+     */
+    async copyResultsToClipboard() {
+      console.log("Copy to clipboard not implemented yet");
+    }
+    /**
+     * Export results to text
+     */
+    exportResultsToText() {
+      console.log("Export to text not implemented yet");
+    }
+    /**
+     * Refresh results
+     */
+    refreshResults() {
+      if (this.lastJobData) {
+        this.generateRecommendations(this.lastJobData.title, this.lastJobData.description);
+      }
+    }
+    /**
+     * Retry generation
+     */
+    retryGeneration() {
+      if (this.lastJobData) {
+        this.generateRecommendations(this.lastJobData.title, this.lastJobData.description);
+      }
+    }
+    /**
+     * Add keyboard shortcuts
+     */
+    addKeyboardShortcuts() {
+      const handleKeydown = (event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+          event.preventDefault();
+          const form = this.container.querySelector(".job-input-form");
+          if (form && this.processingState !== "processing") {
+            this.handleFormSubmission(form);
+          }
+        }
+      };
+      document.addEventListener("keydown", handleKeydown);
+    }
+  };
+
+  // src/ui/settings-tab.ts
+  init_xss_safe_rendering();
+
+  // src/ui/api-config.ts
+  init_xss_safe_rendering();
+
+  // src/services/openai-service.ts
+  var OPENAI_BASE_URL = "https://api.openai.com/v1";
+  var DEFAULT_MODEL = "text-embedding-3-small";
+  var DEFAULT_DIMENSIONS = 1536;
+  var RATE_LIMIT_CONFIG = {
+    MAX_RETRIES: 3,
+    BASE_DELAY: 1e3,
+    // 1 second
+    MAX_DELAY: 3e4,
+    // 30 seconds
+    JITTER_MAX: 0.1,
+    // 10% jitter
+    CONCURRENT_LIMIT: 3
+    // Max concurrent requests
+  };
+  var OpenAIService = class {
+    apiKey = null;
+    currentRequests = 0;
+    requestQueue = [];
+    /**
+     * Set OpenAI API key (stored in memory only)
+     */
+    setApiKey(key) {
+      this.apiKey = key?.trim() || null;
+    }
+    /**
+     * Get current API key status
+     */
+    hasApiKey() {
+      return this.apiKey !== null && this.apiKey.length > 0;
+    }
+    /**
+     * Clear stored API key
+     */
+    clearApiKey() {
+      this.apiKey = null;
+    }
+    /**
+     * Test API connection
+     */
+    async testConnection() {
+      if (!this.hasApiKey()) {
+        return { success: false, error: "No API key configured" };
+      }
+      try {
+        await this.generateEmbedding("test", { skipCache: true });
+        return { success: true };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Unknown error"
+        };
+      }
+    }
+    /**
+     * Generate embedding for text with caching and rate limiting
+     */
+    async generateEmbedding(text, options = {}) {
+      if (!this.hasApiKey()) {
+        throw new Error("OpenAI API key not configured");
+      }
+      const { model = DEFAULT_MODEL, dimensions = DEFAULT_DIMENSIONS } = options;
+      if (!text || text.trim().length === 0) {
+        throw new Error("Text cannot be empty");
+      }
+      const cleanText = text.trim().replace(/\s+/g, " ");
+      await this.acquireRateLimit();
+      try {
+        const embedding = await this.makeEmbeddingRequest(cleanText, model, dimensions);
+        return embedding;
+      } finally {
+        this.releaseRateLimit();
+      }
+    }
+    /**
+     * Generate embeddings for multiple texts (batch processing)
+     */
+    async generateEmbeddings(texts, options = {}) {
+      const results = [];
+      const { onProgress } = options;
+      for (let i = 0; i < texts.length; i++) {
+        const embedding = await this.generateEmbedding(texts[i] || "", options);
+        results.push(embedding);
+        if (onProgress) {
+          onProgress(i + 1, texts.length);
+        }
+      }
+      return results;
+    }
+    // ============================================================================
+    // Private Methods
+    // ============================================================================
+    /**
+     * Make the actual API request with retry logic
+     */
+    async makeEmbeddingRequest(text, model, dimensions, retryCount = 0) {
+      try {
+        const response = await fetch(`${OPENAI_BASE_URL}/embeddings`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${this.apiKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            input: text,
+            model,
+            dimensions
+          })
+        });
+        if (response.status === 429) {
+          const retryAfter = response.headers.get("Retry-After");
+          const delay = retryAfter ? parseInt(retryAfter) * 1e3 : this.calculateBackoffDelay(retryCount);
+          if (retryCount < RATE_LIMIT_CONFIG.MAX_RETRIES) {
+            await this.sleep(delay);
+            return this.makeEmbeddingRequest(text, model, dimensions, retryCount + 1);
+          } else {
+            throw new Error("Rate limit exceeded after maximum retries");
+          }
+        }
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          const errorMessage = errorData.error?.message || `HTTP ${response.status}: ${response.statusText}`;
+          throw new Error(`OpenAI API error: ${errorMessage}`);
+        }
+        const data = await response.json();
+        if (!data.data || !Array.isArray(data.data) || data.data.length === 0) {
+          throw new Error("Invalid embedding response format");
+        }
+        const embeddingData = data.data[0];
+        if (!embeddingData?.embedding || !Array.isArray(embeddingData.embedding)) {
+          throw new Error("Missing embedding data in response");
+        }
+        return new Float32Array(embeddingData.embedding);
+      } catch (error) {
+        if (retryCount < RATE_LIMIT_CONFIG.MAX_RETRIES && this.isRetryableError(error)) {
+          const delay = this.calculateBackoffDelay(retryCount);
+          await this.sleep(delay);
+          return this.makeEmbeddingRequest(text, model, dimensions, retryCount + 1);
+        }
+        throw error;
+      }
+    }
+    /**
+     * Calculate exponential backoff delay with jitter
+     */
+    calculateBackoffDelay(retryCount) {
+      const baseDelay = RATE_LIMIT_CONFIG.BASE_DELAY * Math.pow(2, retryCount);
+      const cappedDelay = Math.min(baseDelay, RATE_LIMIT_CONFIG.MAX_DELAY);
+      const jitter = cappedDelay * RATE_LIMIT_CONFIG.JITTER_MAX * Math.random();
+      return cappedDelay + jitter;
+    }
+    /**
+     * Determine if error is retryable
+     */
+    isRetryableError(error) {
+      if (error instanceof Error) {
+        const message = error.message.toLowerCase();
+        return message.includes("network") || message.includes("timeout") || message.includes("fetch") || message.includes("connection");
+      }
+      return false;
+    }
+    /**
+     * Acquire rate limit slot
+     */
+    async acquireRateLimit() {
+      return new Promise((resolve) => {
+        if (this.currentRequests < RATE_LIMIT_CONFIG.CONCURRENT_LIMIT) {
+          this.currentRequests++;
+          resolve();
+        } else {
+          this.requestQueue.push(() => {
+            this.currentRequests++;
+            resolve();
+          });
+        }
+      });
+    }
+    /**
+     * Release rate limit slot
+     */
+    releaseRateLimit() {
+      this.currentRequests--;
+      if (this.requestQueue.length > 0) {
+        const nextRequest = this.requestQueue.shift();
+        if (nextRequest) {
+          nextRequest();
+        }
+      }
+    }
+    /**
+     * Sleep utility
+     */
+    sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+  };
+  var globalOpenAIService = null;
+  function getOpenAIService() {
+    if (!globalOpenAIService) {
+      globalOpenAIService = new OpenAIService();
+    }
+    return globalOpenAIService;
+  }
+
+  // src/ui/api-config.ts
+  var APIConfig = class {
+    container = null;
+    /**
+     * Render API configuration interface
+     */
+    async render(container) {
+      this.container = container;
+      container.innerHTML = "";
+      const description = createSafeElement(
+        "p",
+        "Your OpenAI API key is stored locally in your browser and never exported.",
+        "section-description"
+      );
+      const form = this.createForm();
+      container.appendChild(description);
+      container.appendChild(form);
+    }
+    /**
+     * Create API key form
+     */
+    createForm() {
+      const form = createSafeElement("div", "", "api-form");
+      const inputGroup = createSafeElement("div", "", "input-group");
+      const label = createSafeElement("label", "OpenAI API Key", "input-label");
+      label.setAttribute("for", "api-key");
+      const keyInput = document.createElement("input");
+      keyInput.type = "password";
+      keyInput.id = "api-key";
+      keyInput.className = "form-input";
+      keyInput.placeholder = "sk-...";
+      const openaiService = getOpenAIService();
+      if (openaiService.hasApiKey()) {
+        keyInput.value = "***key-stored***";
+        keyInput.disabled = true;
+      }
+      inputGroup.appendChild(label);
+      inputGroup.appendChild(keyInput);
+      const buttonGroup = createSafeElement("div", "", "button-group");
+      const saveBtn = this.createSaveButton(keyInput);
+      const testBtn = this.createTestButton();
+      const forgetBtn = this.createForgetButton();
+      buttonGroup.appendChild(saveBtn);
+      buttonGroup.appendChild(testBtn);
+      buttonGroup.appendChild(forgetBtn);
+      form.appendChild(inputGroup);
+      form.appendChild(buttonGroup);
+      return form;
+    }
+    /**
+     * Create save button
+     */
+    createSaveButton(keyInput) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "form-button form-button--primary";
+      const openaiService = getOpenAIService();
+      setSafeTextContent(button, openaiService.hasApiKey() ? "Update Key" : "Save Key");
+      button.addEventListener("click", async () => {
+        await this.saveKey(keyInput.value);
+      });
+      return button;
+    }
+    /**
+     * Create test button
+     */
+    createTestButton() {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "form-button form-button--secondary";
+      setSafeTextContent(button, "Test Connection");
+      button.addEventListener("click", async () => {
+        await this.testConnection();
+      });
+      return button;
+    }
+    /**
+     * Create forget button
+     */
+    createForgetButton() {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "form-button form-button--danger";
+      setSafeTextContent(button, "Forget Key");
+      const openaiService = getOpenAIService();
+      button.style.display = openaiService.hasApiKey() ? "inline-block" : "none";
+      button.addEventListener("click", () => {
+        this.forgetKey();
+      });
+      return button;
+    }
+    // ============================================================================
+    // Actions
+    // ============================================================================
+    /**
+     * Save API key
+     */
+    async saveKey(key) {
+      if (!key || key === "***key-stored***") {
+        alert("Please enter a valid API key");
+        return;
+      }
+      try {
+        const openaiService = getOpenAIService();
+        openaiService.setApiKey(key);
+        const result = await openaiService.testConnection();
+        if (!result.success) {
+          openaiService.clearApiKey();
+          throw new Error(result.error || "Connection test failed");
+        }
+        alert("API key saved and tested successfully");
+        if (this.container) {
+          await this.render(this.container);
+        }
+      } catch (error) {
+        alert(`Failed to save API key: ${error instanceof Error ? error.message : "Unknown error"}`);
+      }
+    }
+    /**
+     * Test connection
+     */
+    async testConnection() {
+      const openaiService = getOpenAIService();
+      if (!openaiService.hasApiKey()) {
+        alert("No API key configured");
+        return;
+      }
+      try {
+        const result = await openaiService.testConnection();
+        if (result.success) {
+          alert("Connection test successful");
+        } else {
+          alert(`Connection test failed: ${result.error}`);
+        }
+      } catch (error) {
+        alert(`Connection test failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+      }
+    }
+    /**
+     * Forget API key
+     */
+    forgetKey() {
+      if (confirm("Are you sure you want to forget your API key? This will disable AI functionality.")) {
+        const openaiService = getOpenAIService();
+        openaiService.clearApiKey();
+        if (this.container) {
+          this.render(this.container);
+        }
+        alert("API key forgotten");
+      }
+    }
+  };
+
+  // src/ui/role-manager.ts
+  init_xss_safe_rendering();
+  init_transactions();
+
+  // src/utils/simple-modal.ts
+  init_xss_safe_rendering();
+  function createSimpleModal(title, formContent, onSubmit, onCancel) {
+    const mainContent = document.querySelector(".main-content") || document.body;
+    const backdrop = createSafeElement("div", "", "modal-backdrop");
+    backdrop.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 250px;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  `;
+    const modal = createSafeElement("div", "", "modal-content");
+    modal.style.cssText = `
+    background: white;
+    border-radius: 8px;
+    padding: 0;
+    max-width: 500px;
+    width: 90%;
+    max-height: 80vh;
+    overflow-y: auto;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+  `;
+    const header = createSafeElement("div", "", "modal-header");
+    header.style.cssText = `
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid #e5e7eb;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  `;
+    const titleElement = createSafeElement("h2", title, "modal-title");
+    titleElement.style.cssText = `
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+  `;
+    const closeButton = document.createElement("button");
+    closeButton.type = "button";
+    closeButton.className = "close-button";
+    closeButton.style.cssText = `
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  `;
+    setSafeTextContent(closeButton, "\xD7");
+    header.appendChild(titleElement);
+    header.appendChild(closeButton);
+    const body = createSafeElement("div", "", "modal-body");
+    body.style.cssText = `
+    padding: 1.5rem;
+  `;
+    body.appendChild(formContent);
+    const footer = createSafeElement("div", "", "modal-footer");
+    footer.style.cssText = `
+    padding: 1rem 1.5rem;
+    border-top: 1px solid #e5e7eb;
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+  `;
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "form-button form-button--secondary";
+    cancelBtn.style.cssText = `
+    padding: 0.5rem 1rem;
+    border: 1px solid #d1d5db;
+    background: white;
+    border-radius: 4px;
+    cursor: pointer;
+  `;
+    setSafeTextContent(cancelBtn, "Cancel");
+    const submitBtn = document.createElement("button");
+    submitBtn.type = "button";
+    submitBtn.className = "form-button form-button--primary";
+    submitBtn.style.cssText = `
+    padding: 0.5rem 1rem;
+    border: none;
+    background: #3b82f6;
+    color: white;
+    border-radius: 4px;
+    cursor: pointer;
+  `;
+    setSafeTextContent(submitBtn, "Save");
+    footer.appendChild(cancelBtn);
+    footer.appendChild(submitBtn);
+    modal.appendChild(header);
+    modal.appendChild(body);
+    modal.appendChild(footer);
+    backdrop.appendChild(modal);
+    const closeModal = () => {
+      mainContent.removeChild(backdrop);
+      document.removeEventListener("keydown", handleKeydown);
+      if (onCancel) onCancel();
+    };
+    const handleSubmit = async () => {
+      try {
+        const formData = new FormData();
+        const inputs = modal.querySelectorAll("input, select, textarea");
+        inputs.forEach((input) => {
+          const element = input;
+          if (element.name) {
+            if (element.type === "checkbox") {
+              formData.append(element.name, element.checked ? "true" : "false");
+            } else {
+              formData.append(element.name, element.value);
+            }
+          }
+        });
+        await onSubmit(formData);
+        closeModal();
+      } catch (error) {
+        console.error("Modal submit error:", error);
+        alert(error instanceof Error ? error.message : "An error occurred");
+      }
+    };
+    const handleKeydown = (event) => {
+      if (event.key === "Escape") {
+        closeModal();
+      } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        handleSubmit();
+      }
+    };
+    closeButton.addEventListener("click", closeModal);
+    cancelBtn.addEventListener("click", closeModal);
+    submitBtn.addEventListener("click", handleSubmit);
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) {
+        closeModal();
+      }
+    });
+    document.addEventListener("keydown", handleKeydown);
+    mainContent.appendChild(backdrop);
+    const firstInput = modal.querySelector("input, select, textarea");
+    if (firstInput) {
+      firstInput.focus();
+    }
+  }
+
+  // src/ui/role-manager.ts
+  var RoleManager = class {
+    container = null;
+    roles = [];
+    sortBy = "endDate";
+    /**
+     * Render role management interface
+     */
+    async render(container) {
+      this.container = container;
+      await this.loadRoles();
+      container.innerHTML = "";
+      const header = this.createHeader();
+      const rolesList = this.createRolesList();
+      container.appendChild(header);
+      container.appendChild(rolesList);
+    }
+    /**
+     * Create header with add button and sort control
+     */
+    createHeader() {
+      const header = createSafeElement("div", "", "role-manager-header");
+      header.style.cssText = `
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 1rem;
+    `;
+      const leftSection = createSafeElement("div", "", "header-left");
+      const description = createSafeElement(
+        "p",
+        "Roles are automatically sorted by date (most recent first). Set bullet limits for recommendations.",
+        "section-description"
+      );
+      const addBtn = document.createElement("button");
+      addBtn.className = "form-button form-button--primary";
+      addBtn.style.marginTop = "0.5rem";
+      setSafeTextContent(addBtn, "Add Role");
+      addBtn.addEventListener("click", () => this.showAddModal());
+      leftSection.appendChild(description);
+      leftSection.appendChild(addBtn);
+      const sortSection = createSafeElement("div", "", "header-sort");
+      const sortLabel = createSafeElement("label", "Sort by:", "sort-label");
+      sortLabel.style.cssText = `
+      display: block;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: #374151;
+      margin-bottom: 0.25rem;
+    `;
+      const sortSelect = document.createElement("select");
+      sortSelect.style.cssText = `
+      padding: 0.375rem 0.75rem;
+      border: 1px solid #d1d5db;
+      border-radius: 4px;
+      font-size: 0.875rem;
+      background: white;
+    `;
+      const endDateOption = document.createElement("option");
+      endDateOption.value = "endDate";
+      setSafeTextContent(endDateOption, "End Date");
+      endDateOption.selected = this.sortBy === "endDate";
+      const startDateOption = document.createElement("option");
+      startDateOption.value = "startDate";
+      setSafeTextContent(startDateOption, "Start Date");
+      startDateOption.selected = this.sortBy === "startDate";
+      sortSelect.appendChild(endDateOption);
+      sortSelect.appendChild(startDateOption);
+      sortSelect.addEventListener("change", () => {
+        this.sortBy = sortSelect.value;
+        this.render(this.container);
+      });
+      sortSection.appendChild(sortLabel);
+      sortSection.appendChild(sortSelect);
+      header.appendChild(leftSection);
+      header.appendChild(sortSection);
+      return header;
+    }
+    /**
+     * Create roles list
+     */
+    createRolesList() {
+      const container = createSafeElement("div", "", "roles-list");
+      container.style.cssText = `
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      margin-top: 0.75rem;
+    `;
+      if (this.roles.length === 0) {
+        const empty = createSafeElement("div", "No roles configured. Add your first role to get started.", "empty-state");
+        empty.style.cssText = `
+        padding: 2rem;
+        text-align: center;
+        color: #6b7280;
+        border: 2px dashed #d1d5db;
+        border-radius: 8px;
+      `;
+        container.appendChild(empty);
+        return container;
+      }
+      const sortedRoles = this.getSortedRoles();
+      sortedRoles.forEach((role) => {
+        const item = this.createRoleCard(role);
+        container.appendChild(item);
+      });
+      return container;
+    }
+    /**
+     * Get roles sorted by current criteria
+     */
+    getSortedRoles() {
+      return [...this.roles].sort((a, b) => {
+        if (this.sortBy === "endDate") {
+          const aDate = a.endDate || "9999-99";
+          const bDate = b.endDate || "9999-99";
+          return bDate.localeCompare(aDate);
+        } else {
+          return b.startDate.localeCompare(a.startDate);
+        }
+      });
+    }
+    /**
+     * Create compact role card
+     */
+    createRoleCard(role) {
+      const card = createSafeElement("div", "", "role-card");
+      card.style.cssText = `
+      background: white;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 0.75rem;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+      transition: box-shadow 0.15s ease;
+    `;
+      const topLine = createSafeElement("div", "", "role-top-line");
+      topLine.style.cssText = `
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.5rem;
+    `;
+      const nameSection = createSafeElement("div", "", "role-name");
+      const title = createSafeElement("div", `${role.title} at ${role.company}`, "role-title");
+      title.style.cssText = `
+      font-weight: 600;
+      font-size: 0.95rem;
+      color: #111827;
+    `;
+      nameSection.appendChild(title);
+      const dateSection = createSafeElement("div", "", "role-date");
+      const dates = createSafeElement("div", this.formatDateRange(role), "role-dates");
+      dates.style.cssText = `
+      color: #6b7280;
+      font-size: 0.8rem;
+      text-align: right;
+    `;
+      dateSection.appendChild(dates);
+      topLine.appendChild(nameSection);
+      topLine.appendChild(dateSection);
+      const bottomLine = createSafeElement("div", "", "role-bottom-line");
+      bottomLine.style.cssText = `
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    `;
+      const bulletsSection = createSafeElement("div", "", "role-bullets");
+      bulletsSection.style.cssText = `
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    `;
+      const bulletsLabel = createSafeElement("span", "Bullets:", "bullets-label");
+      bulletsLabel.style.cssText = `
+      font-size: 0.8rem;
+      color: #374151;
+      font-weight: 500;
+    `;
+      const limitInput = document.createElement("input");
+      limitInput.type = "number";
+      limitInput.min = "1";
+      limitInput.max = "10";
+      limitInput.value = role.bulletsLimit.toString();
+      limitInput.style.cssText = `
+      width: 50px;
+      padding: 0.2rem 0.4rem;
+      border: 1px solid #d1d5db;
+      border-radius: 3px;
+      text-align: center;
+      font-size: 0.8rem;
+    `;
+      limitInput.addEventListener("change", () => this.updateLimit(role.id, parseInt(limitInput.value)));
+      bulletsSection.appendChild(bulletsLabel);
+      bulletsSection.appendChild(limitInput);
+      const actionsSection = createSafeElement("div", "", "role-actions");
+      actionsSection.style.cssText = `
+      display: flex;
+      gap: 0.4rem;
+    `;
+      const editBtn = this.createActionButton("Edit", "secondary", () => this.showEditModal(role.id));
+      const deleteBtn = this.createActionButton("Delete", "danger", () => this.deleteRole(role.id));
+      actionsSection.appendChild(editBtn);
+      actionsSection.appendChild(deleteBtn);
+      bottomLine.appendChild(bulletsSection);
+      bottomLine.appendChild(actionsSection);
+      card.appendChild(topLine);
+      card.appendChild(bottomLine);
+      card.addEventListener("mouseenter", () => {
+        card.style.boxShadow = "0 3px 6px rgba(0, 0, 0, 0.15)";
+      });
+      card.addEventListener("mouseleave", () => {
+        card.style.boxShadow = "0 1px 3px rgba(0, 0, 0, 0.1)";
+      });
+      return card;
+    }
+    /**
+     * Create compact action button
+     */
+    createActionButton(text, variant, onClick) {
+      const button = document.createElement("button");
+      button.type = "button";
+      setSafeTextContent(button, text);
+      button.addEventListener("click", onClick);
+      const baseStyles = `
+      padding: 0.3rem 0.6rem;
+      border-radius: 3px;
+      font-size: 0.8rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    `;
+      if (variant === "danger") {
+        button.style.cssText = baseStyles + `
+        background: #fef2f2;
+        color: #dc2626;
+        border: 1px solid #fecaca;
+      `;
+      } else {
+        button.style.cssText = baseStyles + `
+        background: #f9fafb;
+        color: #374151;
+        border: 1px solid #d1d5db;
+      `;
+      }
+      return button;
+    }
+    // ============================================================================
+    // Actions
+    // ============================================================================
+    /**
+     * Update bullet limit
+     */
+    async updateLimit(roleId, limit) {
+      if (limit < 1 || limit > 10 || isNaN(limit)) {
+        alert("Bullet limit must be between 1 and 10");
+        if (this.container) await this.render(this.container);
+        return;
+      }
+      try {
+        const role = this.roles.find((r) => r.id === roleId);
+        if (!role) return;
+        role.bulletsLimit = limit;
+        await update("roles", role);
+      } catch (error) {
+        alert(`Failed to update limit: ${error instanceof Error ? error.message : "Unknown error"}`);
+      }
+    }
+    /**
+     * Delete role
+     */
+    async deleteRole(roleId) {
+      const role = this.roles.find((r) => r.id === roleId);
+      if (!role) return;
+      if (!confirm(`Delete "${role.title} at ${role.company}"? This will also delete associated data.`)) {
+        return;
+      }
+      try {
+        await deleteById("roles", roleId);
+        if (this.container) await this.render(this.container);
+      } catch (error) {
+        alert(`Failed to delete role: ${error instanceof Error ? error.message : "Unknown error"}`);
+      }
+    }
+    /**
+     * Show add modal
+     */
+    showAddModal() {
+      createSimpleModal("Add Role", this.createRoleForm(), (formData) => {
+        this.saveRole(formData);
+      });
+    }
+    /**
+     * Show edit modal
+     */
+    showEditModal(roleId) {
+      const role = this.roles.find((r) => r.id === roleId);
+      if (!role) return;
+      createSimpleModal("Edit Role", this.createRoleForm(role), (formData) => {
+        this.saveRole(formData, role.id);
+      });
+    }
+    /**
+     * Create role form with simple date inputs
+     */
+    createRoleForm(role) {
+      const form = createSafeElement("div", "", "role-form");
+      const titleGroup = this.createInputGroup("title", "Job Title", "text", "e.g., Senior Product Manager");
+      if (role) titleGroup.querySelector("input").value = role.title;
+      const companyGroup = this.createInputGroup("company", "Company", "text", "e.g., Google");
+      if (role) companyGroup.querySelector("input").value = role.company;
+      const startGroup = this.createDateInputGroup("startDate", "Start Date", "e.g., 2023-01");
+      if (role) startGroup.querySelector("input").value = role.startDate;
+      const endGroup = this.createDateInputGroup("endDate", "End Date", "e.g., 2024-12");
+      if (role && role.endDate) endGroup.querySelector("input").value = role.endDate;
+      const currentGroup = createSafeElement("div", "", "input-group");
+      const currentLabel = createSafeElement("label", "", "checkbox-label");
+      const currentCheckbox = document.createElement("input");
+      currentCheckbox.type = "checkbox";
+      currentCheckbox.name = "isCurrent";
+      currentCheckbox.checked = role ? !role.endDate : false;
+      const checkboxText = createSafeElement("span", "This is my current role", "");
+      currentLabel.appendChild(currentCheckbox);
+      currentLabel.appendChild(checkboxText);
+      currentGroup.appendChild(currentLabel);
+      const endInput = endGroup.querySelector("input");
+      const updateEndDateState = () => {
+        endInput.disabled = currentCheckbox.checked;
+        if (currentCheckbox.checked) {
+          endInput.value = "";
+        }
+      };
+      currentCheckbox.addEventListener("change", updateEndDateState);
+      updateEndDateState();
+      form.appendChild(titleGroup);
+      form.appendChild(companyGroup);
+      form.appendChild(startGroup);
+      form.appendChild(endGroup);
+      form.appendChild(currentGroup);
+      return form;
+    }
+    /**
+     * Create input group helper
+     */
+    createInputGroup(name, label, type, placeholder) {
+      const group = createSafeElement("div", "", "input-group");
+      const labelElement = createSafeElement("label", label, "input-label");
+      const input = document.createElement("input");
+      input.type = type;
+      input.name = name;
+      input.className = "form-input";
+      input.placeholder = placeholder;
+      if (name === "title" || name === "company") {
+        input.required = true;
+      }
+      group.appendChild(labelElement);
+      group.appendChild(input);
+      return group;
+    }
+    /**
+     * Create date input group with validation
+     */
+    createDateInputGroup(name, label, placeholder) {
+      const group = createSafeElement("div", "", "input-group");
+      const labelElement = createSafeElement("label", label, "input-label");
+      const input = document.createElement("input");
+      input.type = "text";
+      input.name = name;
+      input.className = "form-input";
+      input.placeholder = placeholder;
+      input.pattern = "^\\d{4}-\\d{2}$";
+      input.title = "Format: YYYY-MM (e.g., 2023-01)";
+      const helper = createSafeElement("small", "Format: YYYY-MM", "input-helper");
+      if (name === "startDate") {
+        input.required = true;
+      }
+      group.appendChild(labelElement);
+      group.appendChild(input);
+      group.appendChild(helper);
+      return group;
+    }
+    /**
+     * Save role
+     */
+    async saveRole(formData, roleId) {
+      const title = formData.get("title");
+      const company = formData.get("company");
+      const startDate = formData.get("startDate");
+      const endDate = formData.get("endDate");
+      const isCurrent = formData.get("isCurrent") === "true";
+      if (!title || !company || !startDate) {
+        alert("Title, company, and start date are required");
+        return;
+      }
+      const datePattern = /^\d{4}-\d{2}$/;
+      if (!datePattern.test(startDate)) {
+        alert("Start date must be in YYYY-MM format (e.g., 2023-01)");
+        return;
+      }
+      if (endDate && !isCurrent && !datePattern.test(endDate)) {
+        alert("End date must be in YYYY-MM format (e.g., 2024-12)");
+        return;
+      }
+      try {
+        if (roleId) {
+          const role = this.roles.find((r) => r.id === roleId);
+          if (role) {
+            role.title = title;
+            role.company = company;
+            role.startDate = startDate;
+            role.endDate = isCurrent ? null : endDate || null;
+            await update("roles", role);
+          }
+        } else {
+          const newRole = {
+            id: `role_${Date.now()}`,
+            title,
+            company,
+            orderIndex: 0,
+            // Not used anymore but keeping for compatibility
+            bulletsLimit: 3,
+            startDate,
+            endDate: isCurrent ? null : endDate || null
+          };
+          await update("roles", newRole);
+        }
+        if (this.container) await this.render(this.container);
+      } catch (error) {
+        alert(`Failed to save role: ${error instanceof Error ? error.message : "Unknown error"}`);
+      }
+    }
+    // ============================================================================
+    // Utilities
+    // ============================================================================
+    /**
+     * Load roles from storage
+     */
+    async loadRoles() {
+      this.roles = await getAll("roles");
+    }
+    /**
+     * Format date range
+     */
+    formatDateRange(role) {
+      return role.endDate ? `${role.startDate} - ${role.endDate}` : `${role.startDate} - Present`;
+    }
+  };
+
+  // src/ui/settings-tab.ts
+  init_transactions();
+  var SettingsTab = class {
+    container;
+    apiConfig;
+    roleManager;
+    constructor(container) {
+      this.container = container;
+      this.apiConfig = new APIConfig();
+      this.roleManager = new RoleManager();
+    }
+    // ============================================================================
+    // Public Interface
+    // ============================================================================
+    /**
+     * Render the Settings tab content
+     */
+    async render() {
+      this.container.innerHTML = "";
+      const tabContainer = createSafeElement("div", "", "settings-tab");
+      const apiSection = await this.createAPISection();
+      const roleSection = await this.createRoleSection();
+      const dataSection = await this.createDataSection();
+      tabContainer.appendChild(apiSection);
+      tabContainer.appendChild(roleSection);
+      tabContainer.appendChild(dataSection);
+      this.container.appendChild(tabContainer);
+    }
+    // ============================================================================
+    // Section Creation
+    // ============================================================================
+    /**
+     * Create API configuration section
+     */
+    async createAPISection() {
+      const section = createSafeElement("section", "", "settings-section");
+      const title = createSafeElement("h2", "AI Configuration", "section-title");
+      const configContainer = createSafeElement("div", "", "api-config-container");
+      await this.apiConfig.render(configContainer);
+      section.appendChild(title);
+      section.appendChild(configContainer);
+      return section;
+    }
+    /**
+     * Create role management section
+     */
+    async createRoleSection() {
+      const section = createSafeElement("section", "", "settings-section");
+      const title = createSafeElement("h2", "Role Management", "section-title");
+      const managerContainer = createSafeElement("div", "", "role-manager-container");
+      await this.roleManager.render(managerContainer);
+      section.appendChild(title);
+      section.appendChild(managerContainer);
+      return section;
+    }
+    /**
+     * Create data management section
+     */
+    async createDataSection() {
+      const section = createSafeElement("section", "", "settings-section");
+      const title = createSafeElement("h2", "Data Management", "section-title");
+      const usage = await this.createStorageUsage();
+      const actions = this.createDataActions();
+      section.appendChild(title);
+      section.appendChild(usage);
+      section.appendChild(actions);
+      return section;
+    }
+    /**
+     * Create storage usage display
+     */
+    async createStorageUsage() {
+      const container = createSafeElement("div", "", "storage-usage");
+      try {
+        const [roles, bullets, projects] = await Promise.all([
+          getAll("roles"),
+          getAll("bullets"),
+          getAll("projects")
+        ]);
+        const stats = createSafeElement("div", "", "usage-stats");
+        const roleCount = createSafeElement("span", `${roles.length} roles`, "stat-item");
+        const bulletCount = createSafeElement("span", `${bullets.length} bullets`, "stat-item");
+        const projectCount = createSafeElement("span", `${projects.length} projects`, "stat-item");
+        stats.appendChild(roleCount);
+        stats.appendChild(bulletCount);
+        stats.appendChild(projectCount);
+        container.appendChild(stats);
+      } catch (error) {
+        const errorMsg = createSafeElement("div", "Unable to load storage usage", "error-text");
+        container.appendChild(errorMsg);
+      }
+      return container;
+    }
+    /**
+     * Create data action buttons
+     */
+    createDataActions() {
+      const actions = createSafeElement("div", "", "data-actions");
+      const exportBtn = document.createElement("button");
+      exportBtn.className = "form-button form-button--secondary";
+      setSafeTextContent(exportBtn, "Export Data");
+      exportBtn.addEventListener("click", () => this.exportData());
+      const importBtn = document.createElement("button");
+      importBtn.className = "form-button form-button--secondary";
+      setSafeTextContent(importBtn, "Import Data");
+      importBtn.addEventListener("click", () => this.importData());
+      actions.appendChild(exportBtn);
+      actions.appendChild(importBtn);
+      return actions;
+    }
+    // ============================================================================
+    // Data Operations
+    // ============================================================================
+    /**
+     * Export all data
+     */
+    async exportData() {
+      try {
+        const [roles, projects, bullets] = await Promise.all([
+          getAll("roles"),
+          getAll("projects"),
+          getAll("bullets")
+        ]);
+        const exportData = {
+          version: 1,
+          timestamp: Date.now(),
+          data: { roles, projects, bullets }
+        };
+        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `resuum-export-${(/* @__PURE__ */ new Date()).toISOString().split("T")[0]}.json`;
+        link.click();
+        URL.revokeObjectURL(url);
+      } catch (error) {
+        alert(`Export failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+      }
+    }
+    /**
+     * Import data
+     */
+    importData() {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = ".json";
+      input.addEventListener("change", async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        try {
+          const text = await file.text();
+          const importData = JSON.parse(text);
+          if (!importData.version || !importData.data) {
+            throw new Error("Invalid file format");
+          }
+          alert("Import functionality coming soon");
+        } catch (error) {
+          alert(`Import failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+        }
+      });
+      input.click();
+    }
+  };
+
+  // src/ui/app.ts
   var TAB_CONFIGS = [
     {
       id: "application",
@@ -2767,6 +3596,9 @@ ${role.company}` : "Unknown Role"
     tabNavigation = null;
     tabContent = null;
     statusBar = null;
+    // Tab instances
+    applicationTab = null;
+    settingsTab = null;
     constructor(containerId) {
       const container = document.getElementById(containerId);
       if (!container) {
@@ -2895,13 +3727,13 @@ ${role.company}` : "Unknown Role"
       this.tabContent.innerHTML = "";
       switch (tabName) {
         case "application":
-          this.loadApplicationTab();
+          await this.loadApplicationTab();
           break;
         case "experience":
           this.loadExperienceTab();
           break;
         case "settings":
-          this.loadSettingsTab();
+          await this.loadSettingsTab();
           break;
         default:
           throw new Error(`Unknown tab: ${tabName}`);
@@ -2910,135 +3742,78 @@ ${role.company}` : "Unknown Role"
     /**
      * Load New Application tab content
      */
-    loadApplicationTab() {
+    async loadApplicationTab() {
       if (!this.tabContent) return;
-      const container = createSafeElement("div", "", "application-tab");
-      const jobSection = createSafeElement("section", "", "job-input-section");
-      const jobTitle = createSafeElement("h2", "Job Application", "section-title");
-      const jobForm = this.createJobInputForm();
-      jobSection.appendChild(jobTitle);
-      jobSection.appendChild(jobForm);
-      const resultsSection = createSafeElement("section", "", "results-section hidden");
-      const resultsTitle = createSafeElement("h2", "Recommendations", "section-title");
-      const resultsContainer = createSafeElement("div", "", "results-container");
-      resultsSection.appendChild(resultsTitle);
-      resultsSection.appendChild(resultsContainer);
-      container.appendChild(jobSection);
-      container.appendChild(resultsSection);
-      this.tabContent.appendChild(container);
+      try {
+        if (!this.applicationTab) {
+          this.applicationTab = new ApplicationTab(this.tabContent);
+        }
+        this.applicationTab.render();
+      } catch (error) {
+        this.showError(`Failed to load application tab: ${error instanceof Error ? error.message : "Unknown error"}`);
+      }
     }
     /**
-     * Create job input form
+     * Load Experience tab content (placeholder)
      */
-    createJobInputForm() {
-      const form = createSafeElement("form", "", "job-input-form");
-      const titleGroup = createSafeElement("div", "", "form-group");
-      const titleLabel = createSafeElement("label", "Job Title", "form-label");
-      titleLabel.setAttribute("for", "job-title");
-      const titleInput = document.createElement("input");
-      titleInput.type = "text";
-      titleInput.id = "job-title";
-      titleInput.className = "form-input";
-      titleInput.placeholder = "e.g., Senior Product Manager";
-      titleGroup.appendChild(titleLabel);
-      titleGroup.appendChild(titleInput);
-      const descGroup = createSafeElement("div", "", "form-group");
-      const descLabel = createSafeElement("label", "Job Description", "form-label");
-      descLabel.setAttribute("for", "job-description");
-      const descTextarea = document.createElement("textarea");
-      descTextarea.id = "job-description";
-      descTextarea.className = "form-textarea";
-      descTextarea.placeholder = "Paste the job description here...";
-      descTextarea.rows = 8;
-      descGroup.appendChild(descLabel);
-      descGroup.appendChild(descTextarea);
-      const biasGroup = createSafeElement("div", "", "form-group");
-      const biasLabel = createSafeElement("label", "Function Bias", "form-label");
-      biasLabel.setAttribute("for", "function-bias");
-      const biasSelect = document.createElement("select");
-      biasSelect.id = "function-bias";
-      biasSelect.className = "form-select";
-      const biasOptions = [
-        { value: "general", label: "General" },
-        { value: "technical", label: "Technical" },
-        { value: "business_strategy", label: "Business Strategy" },
-        { value: "marketing", label: "Marketing" },
-        { value: "operations", label: "Operations" }
-      ];
-      biasOptions.forEach((option) => {
-        const optionElement = document.createElement("option");
-        optionElement.value = option.value;
-        setSafeTextContent(optionElement, option.label);
-        biasSelect.appendChild(optionElement);
-      });
-      biasGroup.appendChild(biasLabel);
-      biasGroup.appendChild(biasSelect);
-      const submitButton = document.createElement("button");
-      submitButton.type = "submit";
-      submitButton.className = "form-submit";
-      setSafeTextContent(submitButton, "Generate Recommendations");
-      form.addEventListener("submit", (event) => {
-        event.preventDefault();
-        this.handleJobSubmission(titleInput.value, descTextarea.value, biasSelect.value);
-      });
-      form.appendChild(titleGroup);
-      form.appendChild(descGroup);
-      form.appendChild(biasGroup);
-      form.appendChild(submitButton);
-      return form;
-    }
     /**
-     * Load Experience tab content
+     * Load Experience tab content (FIXED VERSION)
+     * Replace the existing loadExperienceTab() method in app.ts with this
      */
-    loadExperienceTab() {
+    async loadExperienceTab() {
       if (!this.tabContent) return;
       console.log("Loading Experience tab...");
       try {
-        Promise.resolve().then(() => (init_experience_tab(), experience_tab_exports)).then(({ ExperienceTab: ExperienceTab2 }) => {
-          if (this.tabContent) {
-            console.log("Creating ExperienceTab instance...");
-            const experienceTab = new ExperienceTab2(this.tabContent);
-            experienceTab.render();
-            console.log("ExperienceTab rendered successfully");
-          }
-        }).catch((error) => {
-          console.error("Dynamic import failed:", error);
-          if (this.tabContent) {
-            this.tabContent.innerHTML = `<div style="color: red; padding: 1rem;">
-                Failed to load Experience tab: ${error.message}
-            </div>`;
-          }
-        });
+        this.tabContent.innerHTML = "";
+        const { ExperienceTab: ExperienceTab2 } = await Promise.resolve().then(() => (init_experience_tab(), experience_tab_exports));
+        console.log("ExperienceTab imported successfully");
+        console.log("Creating ExperienceTab instance...");
+        const experienceTab = new ExperienceTab2(this.tabContent);
+        console.log("Rendering ExperienceTab...");
+        await experienceTab.render();
+        console.log("ExperienceTab rendered successfully");
       } catch (error) {
         console.error("Experience tab error:", error);
         if (this.tabContent) {
-          this.tabContent.innerHTML = `<div style="color: red; padding: 1rem;">
-            Experience tab error: ${error instanceof Error ? error.message : "Unknown error"}
-            </div>`;
+          this.tabContent.innerHTML = `
+          <div style="color: red; padding: 1rem; border: 1px solid #ff0000; border-radius: 4px; margin: 1rem;">
+            <h3>Experience Tab Error</h3>
+            <p>Failed to load Experience tab: ${error instanceof Error ? error.message : "Unknown error"}</p>
+            <details>
+              <summary>Click for Error Details</summary>
+              <pre style="background: #f5f5f5; padding: 1rem; margin-top: 0.5rem; overflow: auto;">${error instanceof Error ? error.stack : JSON.stringify(error, null, 2)}</pre>
+            </details>
+            <br>
+            <button onclick="location.reload()" style="padding: 0.5rem 1rem; background: #007cba; color: white; border: none; border-radius: 4px; cursor: pointer;">
+              Reload Page
+            </button>
+          </div>
+        `;
         }
       }
     }
     /**
-     * Load Settings tab content  
+     * Load Settings tab content
      */
-    loadSettingsTab() {
+    async loadSettingsTab() {
       if (!this.tabContent) return;
-      const container = createSafeElement("div", "", "settings-tab");
-      const placeholder = createSafeElement("div", "Settings configuration coming soon...", "tab-placeholder");
-      container.appendChild(placeholder);
-      this.tabContent.appendChild(container);
+      try {
+        if (!this.settingsTab) {
+          this.settingsTab = new SettingsTab(this.tabContent);
+        }
+        await this.settingsTab.render();
+      } catch (error) {
+        this.showError(`Failed to load settings tab: ${error instanceof Error ? error.message : "Unknown error"}`);
+      }
     }
-    // ============================================================================
-    // Event Handlers
-    // ============================================================================
     /**
-     * Handle job submission
+     * Generate recommendations (placeholder)
      */
-    async handleJobSubmission(title, description, bias) {
+    async generateRecommendations() {
       try {
         this.showLoading("Generating recommendations...");
         await new Promise((resolve) => setTimeout(resolve, 2e3));
-        this.showSuccess("Recommendations generated successfully!");
+        this.showSuccess("Recommendations generated successfully");
       } catch (error) {
         this.showError(`Failed to generate recommendations: ${error instanceof Error ? error.message : "Unknown error"}`);
       }

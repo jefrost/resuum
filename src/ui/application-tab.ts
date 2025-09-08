@@ -7,13 +7,40 @@ import { createSafeElement, setSafeTextContent } from './xss-safe-rendering';
 import { getSampleDataset } from '../data/sample-data';
 
 // ============================================================================
+// Types
+// ============================================================================
+
+interface GenerationResult {
+  jobTitle: string;
+  totalBullets: number;
+  processingTime: number;
+  projectsConsidered: number;
+  roleResults: RoleResult[];
+}
+
+interface RoleResult {
+  roleTitle: string;
+  projectsShortlisted: string[];
+  selectedBullets: BulletResult[];
+  avgRelevance: number;
+}
+
+interface BulletResult {
+  text: string;
+  relevance: number;
+  projectName: string;
+}
+
+// ============================================================================
 // Application Tab Class
 // ============================================================================
 
 export class ApplicationTab {
   private container: HTMLElement;
   private processingState: 'idle' | 'processing' | 'complete' | 'error' = 'idle';
-  private lastResults: any = null;
+  private lastResults: GenerationResult | null = null;
+  private lastError: string | null = null;
+  private lastJobData: { title: string; description: string } | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -36,12 +63,15 @@ export class ApplicationTab {
     tabContainer.appendChild(inputSection);
     
     // Create results section (if we have results)
-    if (this.lastResults) {
+    if (this.lastResults || this.processingState !== 'idle') {
       const resultsSection = this.createResultsSection();
       tabContainer.appendChild(resultsSection);
     }
     
     this.container.appendChild(tabContainer);
+    
+    // Add keyboard shortcuts
+    this.addKeyboardShortcuts();
   }
 
   // ============================================================================
@@ -74,49 +104,47 @@ export class ApplicationTab {
    */
   private createJobInputForm(): HTMLElement {
     const form = createSafeElement('form', '', 'job-input-form');
+    form.setAttribute('data-form', 'job-input');
     
     // Job title input
-    const titleGroup = this.createInputGroup('job-title', 'Job Title', 'text', 'e.g., Senior Software Engineer');
+    const titleGroup = this.createInputGroup(
+      'job-title', 
+      'Job Title', 
+      'text', 
+      'e.g., Senior Product Manager'
+    );
     
     // Job description textarea
-    const descGroup = this.createTextareaGroup(
-      'job-description', 
-      'Job Description', 
+    const descriptionGroup = this.createTextareaGroup(
+      'job-description',
+      'Job Description',
       'Paste the complete job description here...'
     );
     
-    // Function bias selector
-    const biasGroup = this.createSelectGroup('function-bias', 'Function Bias', [
-      { value: 'general', label: 'General' },
-      { value: 'technical', label: 'Technical' },
-      { value: 'business_strategy', label: 'Business Strategy' },
-      { value: 'marketing', label: 'Marketing/PMM' },
-      { value: 'operations', label: 'Operations' }
-    ]);
-    
     // Submit button
     const submitButton = document.createElement('button');
-    submitButton.type = 'button';
-    submitButton.className = 'generate-button';
+    submitButton.type = 'submit';
+    submitButton.className = 'form-submit';
+    submitButton.disabled = this.processingState === 'processing';
     setSafeTextContent(submitButton, 
       this.processingState === 'processing' ? 'Generating...' : 'Generate Recommendations'
     );
-    submitButton.disabled = this.processingState === 'processing';
-    
-    submitButton.addEventListener('click', () => {
-      this.handleSubmission();
-    });
     
     form.appendChild(titleGroup);
-    form.appendChild(descGroup);
-    form.appendChild(biasGroup);
+    form.appendChild(descriptionGroup);
     form.appendChild(submitButton);
+    
+    // Add form submission handler
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      this.handleFormSubmission(form);
+    });
     
     return form;
   }
 
   /**
-   * Create input group with label
+   * Create input group
    */
   private createInputGroup(id: string, label: string, type: string, placeholder: string): HTMLElement {
     const group = createSafeElement('div', '', 'input-group');
@@ -137,7 +165,7 @@ export class ApplicationTab {
   }
 
   /**
-   * Create textarea group with label
+   * Create textarea group
    */
   private createTextareaGroup(id: string, label: string, placeholder: string): HTMLElement {
     const group = createSafeElement('div', '', 'input-group');
@@ -153,32 +181,6 @@ export class ApplicationTab {
     
     group.appendChild(labelElement);
     group.appendChild(textarea);
-    
-    return group;
-  }
-
-  /**
-   * Create select group with options
-   */
-  private createSelectGroup(id: string, label: string, options: Array<{value: string; label: string}>): HTMLElement {
-    const group = createSafeElement('div', '', 'input-group');
-    
-    const labelElement = createSafeElement('label', label, 'input-label');
-    labelElement.setAttribute('for', id);
-    
-    const select = document.createElement('select') as HTMLSelectElement;
-    select.id = id;
-    select.className = 'form-select';
-    
-    options.forEach(option => {
-      const optionElement = document.createElement('option');
-      optionElement.value = option.value;
-      setSafeTextContent(optionElement, option.label);
-      select.appendChild(optionElement);
-    });
-    
-    group.appendChild(labelElement);
-    group.appendChild(select);
     
     return group;
   }
@@ -222,7 +224,7 @@ export class ApplicationTab {
     const container = createSafeElement('div', '', 'processing-status');
     
     const spinner = createSafeElement('div', '', 'spinner');
-    const status = createSafeElement('p', 'Analyzing job description and ranking projects...', 'status-text');
+    const status = createSafeElement('p', 'Analyzing job description and finding best matches...', 'status-text');
     
     container.appendChild(spinner);
     container.appendChild(status);
@@ -234,6 +236,8 @@ export class ApplicationTab {
    * Create results summary box
    */
   private createResultsSummary(): HTMLElement {
+    if (!this.lastResults) return createSafeElement('div', '', 'results-summary');
+    
     const summary = createSafeElement('div', '', 'results-summary');
     
     const { totalBullets, processingTime, projectsConsidered } = this.lastResults;
@@ -251,9 +255,11 @@ export class ApplicationTab {
    * Create detailed results display
    */
   private createResultsDetails(): HTMLElement {
+    if (!this.lastResults) return createSafeElement('div', '', 'results-details');
+    
     const details = createSafeElement('div', '', 'results-details');
     
-    this.lastResults.roleResults.forEach((roleResult: any) => {
+    this.lastResults.roleResults.forEach((roleResult: RoleResult) => {
       const roleSection = this.createRoleResultSection(roleResult);
       details.appendChild(roleSection);
     });
@@ -264,7 +270,7 @@ export class ApplicationTab {
   /**
    * Create individual role result section
    */
-  private createRoleResultSection(roleResult: any): HTMLElement {
+  private createRoleResultSection(roleResult: RoleResult): HTMLElement {
     const section = createSafeElement('div', '', 'role-result-section');
     
     // Role header
@@ -278,10 +284,21 @@ export class ApplicationTab {
     header.appendChild(title);
     header.appendChild(projectsInfo);
     
-    // Bullets list
+    // Bullet points list
     const bulletsList = createSafeElement('ul', '', 'bullets-list');
-    roleResult.selectedBullets.forEach((bullet: any) => {
-      const listItem = this.createBulletListItem(bullet);
+    
+    // Sort bullets by relevance for deterministic output
+    const sortedBullets = [...roleResult.selectedBullets].sort((a, b) => b.relevance - a.relevance);
+    
+    sortedBullets.forEach((bullet: BulletResult) => {
+      const listItem = createSafeElement('li', '', 'bullet-item');
+      
+      const bulletText = createSafeElement('span', bullet.text, 'bullet-text');
+      const metadata = createSafeElement('span', '', 'bullet-metadata');
+      setSafeTextContent(metadata, `(Relevance: ${Math.round(bullet.relevance * 100)}%, Project: ${bullet.projectName})`);
+      
+      listItem.appendChild(bulletText);
+      listItem.appendChild(metadata);
       bulletsList.appendChild(listItem);
     });
     
@@ -292,47 +309,29 @@ export class ApplicationTab {
   }
 
   /**
-   * Create individual bullet list item
-   */
-  private createBulletListItem(bullet: any): HTMLElement {
-    const listItem = createSafeElement('li', '', 'bullet-item');
-    
-    const bulletText = createSafeElement('span', '', 'bullet-text');
-    setSafeTextContent(bulletText, bullet.text);
-    
-    const metadata = createSafeElement('span', '', 'bullet-metadata');
-    setSafeTextContent(metadata, 
-      `(Relevance: ${Math.round(bullet.relevance * 100)}%, Project: ${bullet.projectName})`
-    );
-    
-    listItem.appendChild(bulletText);
-    listItem.appendChild(metadata);
-    
-    return listItem;
-  }
-
-  /**
-   * Create results actions (copy, export)
+   * Create results actions section
    */
   private createResultsActions(): HTMLElement {
     const actions = createSafeElement('div', '', 'results-actions');
     
     const copyButton = document.createElement('button');
-    copyButton.className = 'action-button copy-button';
-    setSafeTextContent(copyButton, 'Copy All');
-    copyButton.addEventListener('click', () => {
-      this.copyResults();
-    });
+    copyButton.className = 'action-button action-button--primary';
+    setSafeTextContent(copyButton, 'Copy All Bullets');
+    copyButton.addEventListener('click', () => this.copyResultsToClipboard());
     
     const exportButton = document.createElement('button');
-    exportButton.className = 'action-button export-button';
+    exportButton.className = 'action-button action-button--secondary';
     setSafeTextContent(exportButton, 'Export to Plain Text');
-    exportButton.addEventListener('click', () => {
-      this.exportResults();
-    });
+    exportButton.addEventListener('click', () => this.exportResultsToText());
+    
+    const refreshButton = document.createElement('button');
+    refreshButton.className = 'action-button action-button--tertiary';
+    setSafeTextContent(refreshButton, 'Refresh Results');
+    refreshButton.addEventListener('click', () => this.refreshResults());
     
     actions.appendChild(copyButton);
     actions.appendChild(exportButton);
+    actions.appendChild(refreshButton);
     
     return actions;
   }
@@ -341,10 +340,21 @@ export class ApplicationTab {
    * Create error display
    */
   private createErrorDisplay(): HTMLElement {
-    const error = createSafeElement('div', '', 'error-display');
-    const message = createSafeElement('p', 'Failed to generate recommendations. Please try again.', 'error-message');
-    error.appendChild(message);
-    return error;
+    const container = createSafeElement('div', '', 'error-display');
+    
+    const title = createSafeElement('h4', 'Generation Failed', 'error-title');
+    const message = createSafeElement('p', this.lastError || 'Unknown error occurred', 'error-message');
+    
+    const retryButton = document.createElement('button');
+    retryButton.className = 'action-button action-button--primary';
+    setSafeTextContent(retryButton, 'Try Again');
+    retryButton.addEventListener('click', () => this.retryGeneration());
+    
+    container.appendChild(title);
+    container.appendChild(message);
+    container.appendChild(retryButton);
+    
+    return container;
   }
 
   // ============================================================================
@@ -354,175 +364,137 @@ export class ApplicationTab {
   /**
    * Handle form submission
    */
-  private async handleSubmission(): Promise<void> {
-    const jobTitle = (document.getElementById('job-title') as HTMLInputElement)?.value || '';
-    const jobDescription = (document.getElementById('job-description') as HTMLTextAreaElement)?.value || '';
-    const functionBias = (document.getElementById('function-bias') as HTMLSelectElement)?.value || 'general';
-    
-    if (!jobDescription.trim()) {
-      alert('Please enter a job description');
-      return;
-    }
-    
+  private async handleFormSubmission(form: HTMLElement): Promise<void> {
     try {
-      this.processingState = 'processing';
-      this.render(); // Show processing state
+      const formData = new FormData(form as HTMLFormElement);
+      const jobTitle = formData.get('job-title') as string;
+      const jobDescription = formData.get('job-description') as string;
       
-      // Simple algorithm placeholder - deterministic for testing
-      const results = await this.generatePlaceholderResults(jobTitle, jobDescription, functionBias);
+      if (!jobDescription?.trim()) {
+        throw new Error('Job description is required');
+      }
       
-      this.lastResults = results;
-      this.processingState = 'complete';
-      this.render();
+      await this.generateRecommendations(jobTitle, jobDescription);
       
     } catch (error) {
-      console.error('Generation failed:', error);
       this.processingState = 'error';
+      this.lastError = error instanceof Error ? error.message : 'Unknown error';
       this.render();
     }
   }
 
   /**
-   * Generate placeholder results for walking skeleton
+   * Generate recommendations (placeholder for now)
    */
-  private async generatePlaceholderResults(title: string, description: string, bias: string): Promise<any> {
-    // Simulate processing time
-    await new Promise(resolve => setTimeout(resolve, 2000));
+  private async generateRecommendations(jobTitle: string, jobDescription: string): Promise<void> {
+    this.processingState = 'processing';
+    this.lastError = null;
+    this.lastJobData = { title: jobTitle, description: jobDescription };
+    this.render();
     
-    const { roles, bullets, projects } = getSampleDataset();
-    const processingTime = (1.8 + Math.random() * 1.4).toFixed(1); // 1.8-3.2s
-    
-    // Simple deterministic selection: pick first 2 bullets from each role
-    const roleResults = roles.map(role => {
-      const roleBullets = bullets.filter(b => b.roleId === role.id && b.embeddingState === 'ready');
-      const selectedBullets = roleBullets.slice(0, Math.min(2, role.bulletsLimit)).map(bullet => {
-        const project = projects.find(p => p.id === bullet.projectId);
-        return {
-          id: bullet.id,
-          text: bullet.text,
-          relevance: 0.85 + Math.random() * 0.1, // 85-95%
-          projectName: project?.name || 'Unknown Project'
-        };
-      });
+    try {
+      // TODO: Implement actual AI-powered recommendation generation
+      const startTime = Date.now();
       
-      const projectsConsidered = [...new Set(selectedBullets.map(b => b.projectName))];
+      // Simulate processing delay
+      await new Promise(resolve => setTimeout(resolve, 2000));
       
-      return {
-        roleTitle: `${role.title} (${role.company})`,
-        selectedBullets,
-        projectsShortlisted: projectsConsidered,
-        avgRelevance: selectedBullets.reduce((sum, b) => sum + b.relevance, 0) / selectedBullets.length
-      };
-    }).filter(result => result.selectedBullets.length > 0);
-    
-    const totalBullets = roleResults.reduce((sum, role) => sum + role.selectedBullets.length, 0);
-    const projectsConsidered = [...new Set(roleResults.flatMap(r => r.projectsShortlisted))].length;
-    
+      // Mock result for now
+      const result = await this.simulateRecommendationGeneration(jobTitle, jobDescription);
+      
+      const processingTime = (Date.now() - startTime) / 1000;
+      result.processingTime = processingTime;
+      
+      this.lastResults = result;
+      this.processingState = 'complete';
+      this.render();
+      
+    } catch (error) {
+      this.processingState = 'error';
+      this.lastError = error instanceof Error ? error.message : 'Unknown error';
+      this.render();
+    }
+  }
+
+  /**
+   * Simulate recommendation generation (temporary)
+   */
+  private async simulateRecommendationGeneration(jobTitle: string, jobDescription: string): Promise<GenerationResult> {
     return {
-      jobTitle: title,
-      totalBullets,
-      processingTime: parseFloat(processingTime),
-      projectsConsidered,
-      roleResults,
-      deepAnalysis: {
-        enabled: false,
-        focusSummary: `Emphasized ${bias} skills and quantitative results`
-      }
+      jobTitle,
+      totalBullets: 5,
+      processingTime: 2.1,
+      projectsConsidered: 8,
+      roleResults: [
+        {
+          roleTitle: 'Senior Consultant',
+          projectsShortlisted: ['Global Telecom', 'Healthcare M&A', 'Retail Strategy'],
+          selectedBullets: [
+            {
+              text: 'Led cross-functional team of 12 engineers to deliver enterprise software platform, resulting in 40% improvement in deployment efficiency',
+              relevance: 0.94,
+              projectName: 'Global Telecom'
+            },
+            {
+              text: 'Developed comprehensive market analysis framework, identifying $50M growth opportunity in emerging markets',
+              relevance: 0.89,
+              projectName: 'Healthcare M&A'
+            }
+          ],
+          avgRelevance: 0.90
+        }
+      ]
     };
   }
 
   /**
    * Copy results to clipboard
    */
-  private async copyResults(): Promise<void> {
-    if (!this.lastResults) return;
-    
-    try {
-      const text = this.formatResultsForCopy();
-      await navigator.clipboard.writeText(text);
-      
-      // Show temporary success feedback
-      const copyButton = document.querySelector('.copy-button') as HTMLButtonElement;
-      if (copyButton) {
-        const originalText = copyButton.textContent;
-        setSafeTextContent(copyButton, 'Copied!');
-        setTimeout(() => {
-          setSafeTextContent(copyButton, originalText || 'Copy All');
-        }, 2000);
+  private async copyResultsToClipboard(): Promise<void> {
+    // TODO: Implement clipboard functionality
+    console.log('Copy to clipboard not implemented yet');
+  }
+
+  /**
+   * Export results to text
+   */
+  private exportResultsToText(): void {
+    // TODO: Implement export functionality
+    console.log('Export to text not implemented yet');
+  }
+
+  /**
+   * Refresh results
+   */
+  private refreshResults(): void {
+    if (this.lastJobData) {
+      this.generateRecommendations(this.lastJobData.title, this.lastJobData.description);
+    }
+  }
+
+  /**
+   * Retry generation
+   */
+  private retryGeneration(): void {
+    if (this.lastJobData) {
+      this.generateRecommendations(this.lastJobData.title, this.lastJobData.description);
+    }
+  }
+
+  /**
+   * Add keyboard shortcuts
+   */
+  private addKeyboardShortcuts(): void {
+    const handleKeydown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+        event.preventDefault();
+        const form = this.container.querySelector('.job-input-form') as HTMLFormElement;
+        if (form && this.processingState !== 'processing') {
+          this.handleFormSubmission(form);
+        }
       }
-    } catch (error) {
-      console.error('Copy failed:', error);
-      alert('Failed to copy to clipboard');
-    }
-  }
-
-  /**
-   * Export results to plain text file
-   */
-  private exportResults(): void {
-    if (!this.lastResults) return;
+    };
     
-    try {
-      const text = this.formatResultsForExport();
-      const blob = new Blob([text], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `resuum-recommendations-${Date.now()}.txt`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error('Export failed:', error);
-      alert('Failed to export results');
-    }
-  }
-
-  /**
-   * Format results for clipboard copy (deterministic ordering)
-   */
-  private formatResultsForCopy(): string {
-    const lines: string[] = [];
-    
-    // Sort role results by role order for deterministic output
-    const sortedRoleResults = this.lastResults.roleResults.slice().sort((a: any, b: any) => {
-      return a.roleTitle.localeCompare(b.roleTitle);
-    });
-    
-    sortedRoleResults.forEach((roleResult: any) => {
-      lines.push(`${roleResult.roleTitle}:`);
-      lines.push('');
-      
-      roleResult.selectedBullets.forEach((bullet: any) => {
-        lines.push(`• ${bullet.text}`);
-      });
-      
-      lines.push('');
-    });
-    
-    return lines.join('\n');
-  }
-
-  /**
-   * Format results for file export (includes metadata)
-   */
-  private formatResultsForExport(): string {
-    const lines: string[] = [];
-    const timestamp = new Date().toLocaleString();
-    
-    lines.push('RESUUM RECOMMENDATIONS');
-    lines.push(`Generated: ${timestamp}`);
-    lines.push(`Job: ${this.lastResults.jobTitle}`);
-    lines.push(`Processing time: ${this.lastResults.processingTime}s`);
-    lines.push('');
-    lines.push('=' .repeat(50));
-    lines.push('');
-    
-    // Add formatted bullet points
-    lines.push(this.formatResultsForCopy());
-    
-    return lines.join('\n');
+    document.addEventListener('keydown', handleKeydown);
   }
 }

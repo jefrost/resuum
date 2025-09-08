@@ -1,14 +1,14 @@
 /**
- * Bullet form HTML builder (120 lines)
+ * Bullet form HTML builder
+ * Simplified for AI-analysis approach
  */
 
-import { BulletValidator } from './bullet-validator';
-import { createSafeElement } from './xss-safe-rendering';
+import { getBulletValidator } from './bullet-validator';
+import { createSafeElement, setSafeTextContent } from './xss-safe-rendering';
 import { getAll } from '../storage/transactions';
 import type { Role, Project } from '../types';
 
 export class BulletFormBuilder {
-  private validator = new BulletValidator();
   private roles: Role[] = [];
   private projects: Project[] = [];
 
@@ -21,12 +21,10 @@ export class BulletFormBuilder {
       this.createRoleSection(config.defaultRoleId),
       this.createProjectSection(config.defaultRoleId, config.defaultProjectId),
       this.createTextSection(config.bullet?.text || ''),
-      this.createQualitySection(),
       this.createButtonSection(isEdit, onCancel)
     );
     
     this.setupEvents(form, onSubmit);
-    this.updateQualityPreview(form, config.bullet?.text || '');
     
     return form;
   }
@@ -47,14 +45,7 @@ export class BulletFormBuilder {
       select.appendChild(option);
     });
     
-    const newOption = document.createElement('option');
-    newOption.value = 'new_role';
-    newOption.textContent = '+ New Role';
-    select.appendChild(newOption);
-    
-    const newInputs = this.createNewRoleInputs();
-    group.append(label, select, newInputs);
-    
+    group.append(label, select);
     return group;
   }
 
@@ -68,9 +59,7 @@ export class BulletFormBuilder {
     
     this.updateProjectOptions(select, defaultRoleId, defaultProjectId);
     
-    const newInputs = this.createNewProjectInputs();
-    group.append(label, select, newInputs);
-    
+    group.append(label, select);
     return group;
   }
 
@@ -85,37 +74,23 @@ export class BulletFormBuilder {
     textarea.placeholder = 'Enter your bullet point...';
     textarea.rows = 4;
     textarea.value = defaultText;
-    textarea.disabled = false;
     
-    this.validator.updateCharCounter(defaultText, counter);
+    this.updateCharCounter(defaultText, counter);
     group.append(label, textarea, counter);
-
-    textarea.addEventListener('input', (e) => {
-        console.log('Text input working:', textarea.value.length);
-      });
     
-    return group;
-  }
-
-  private createQualitySection(): HTMLElement {
-    const group = createSafeElement('div', '', 'form-group');
-    const label = createSafeElement('label', 'Quality Indicators', 'form-label');
-    const preview = createSafeElement('div', '', 'quality-preview');
-    
-    group.append(label, preview);
     return group;
   }
 
   private createButtonSection(isEdit: boolean, onCancel: () => void): HTMLElement {
     const group = createSafeElement('div', '', 'modal-buttons');
-    const cancelBtn = document.createElement('button');
-    const saveBtn = document.createElement('button');
     
+    const cancelBtn = document.createElement('button');
     cancelBtn.type = 'button';
     cancelBtn.textContent = 'Cancel';
     cancelBtn.className = 'btn btn-secondary';
     cancelBtn.onclick = onCancel;
     
+    const saveBtn = document.createElement('button');
     saveBtn.type = 'submit';
     saveBtn.textContent = isEdit ? 'Update' : 'Create';
     saveBtn.className = 'btn btn-primary';
@@ -124,133 +99,42 @@ export class BulletFormBuilder {
     return group;
   }
 
-  private createNewRoleInputs(): HTMLElement {
-    const container = createSafeElement('div', '', 'new-role-input hidden');
-    const titleInput = document.createElement('input');
-    const companyInput = document.createElement('input');
-    
-    titleInput.id = 'new-role-title';
-    titleInput.placeholder = 'Role title';
-    titleInput.className = 'form-input';
-    
-    companyInput.id = 'new-role-company';
-    companyInput.placeholder = 'Company name';
-    companyInput.className = 'form-input';
-    
-    container.append(titleInput, companyInput);
-
-    titleInput.addEventListener('input', (e) => {
-        console.log('Role title input working');
-      });
-
-    return container;
-  }
-
-  private createNewProjectInputs(): HTMLElement {
-    const container = createSafeElement('div', '', 'new-project-input hidden');
-    const nameInput = document.createElement('input');
-    const descInput = document.createElement('textarea');
-    
-    nameInput.id = 'new-project-name';
-    nameInput.placeholder = 'Project name';
-    nameInput.className = 'form-input';
-    
-    descInput.id = 'new-project-description';
-    descInput.placeholder = 'Description (optional)';
-    descInput.className = 'form-textarea';
-    descInput.rows = 2;
-    
-    container.append(nameInput, descInput);
-    return container;
-  }
-
   private setupEvents(form: HTMLElement, onSubmit: (data: any) => Promise<void>): void {
     const roleSelect = form.querySelector('#bullet-role') as HTMLSelectElement;
     const projectSelect = form.querySelector('#bullet-project') as HTMLSelectElement;
-    const textInput = form.querySelector('#bullet-text') as HTMLTextAreaElement;
-    const newRoleInputs = form.querySelector('.new-role-input') as HTMLElement;
-    const newProjectInputs = form.querySelector('.new-project-input') as HTMLElement;
-  
-    // CRITICAL FIX: Check initial state and show inputs if needed
-    if (roleSelect.value === 'new_role') {
-      newRoleInputs.classList.remove('hidden');
-    }
+    const textarea = form.querySelector('#bullet-text') as HTMLTextAreaElement;
+    const counter = form.querySelector('.char-counter') as HTMLElement;
     
-    if (projectSelect.value === 'new_project') {
-      newProjectInputs.classList.remove('hidden');
-    }
-  
-    // Fix role change handler (remove unused parameter)
+    // Role change updates projects
     roleSelect.addEventListener('change', () => {
-        
-        if (roleSelect.value === 'new_role') {
-          // Fix: Pass 'new_role' instead of undefined
-          this.updateProjectOptions(projectSelect, 'new_role');
-        } else {
-          this.updateProjectOptions(projectSelect, roleSelect.value);
-        }
-      });
-  
-    // Test if text input works
-    textInput.addEventListener('input', () => {
-      console.log('Text input working, length:', textInput.value.length);
-      const counter = form.querySelector('.char-counter') as HTMLElement;
-      this.validator.updateCharCounter(textInput.value, counter);
-      this.updateQualityPreview(form, textInput.value);
+      this.updateProjectOptions(projectSelect, roleSelect.value);
     });
     
-    roleSelect.onchange = () => {
-      const newRoleInputs = form.querySelector('.new-role-input') as HTMLElement;
-      if (roleSelect.value === 'new_role') {
-        newRoleInputs.classList.remove('hidden');
-      } else {
-        newRoleInputs.classList.add('hidden');
-        this.updateProjectOptions(projectSelect, roleSelect.value);
-      }
-    };
+    // Text change updates counter
+    textarea.addEventListener('input', () => {
+      this.updateCharCounter(textarea.value, counter);
+    });
     
-    projectSelect.onchange = () => {
-      const newProjectInputs = form.querySelector('.new-project-input') as HTMLElement;
-      newProjectInputs.classList.toggle('hidden', projectSelect.value !== 'new_project');
-    };
-    
-    textInput.oninput = () => {
-      const counter = form.querySelector('.char-counter') as HTMLElement;
-      this.validator.updateCharCounter(textInput.value, counter);
-      this.updateQualityPreview(form, textInput.value);
-    };
-    
-    form.onsubmit = async (e) => {
+    // Form submission
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
+      
       const data = this.getFormData(form);
-      const validation = this.validator.validate(data);
+      const validation = this.validateFormData(data);
+      
       if (!validation.isValid) {
         alert(validation.errors.join('\n'));
         return;
       }
+      
       await onSubmit(data);
-    };
-
-    // In setupEvents method, replace the role change handler:
-    roleSelect.addEventListener('change', (e) => {
-        console.log('Role changed to:', roleSelect.value);
-        const selectedRole = roleSelect.value;
-        
-        if (selectedRole === 'new_role') {
-        newRoleInputs.classList.remove('hidden');
-        this.updateProjectOptions(projectSelect, 'new_role');
-        } else {
-        newRoleInputs.classList.add('hidden');
-        this.updateProjectOptions(projectSelect, selectedRole);
-        }
     });
   }
 
   private updateProjectOptions(select: HTMLSelectElement, roleId?: string, selectedId?: string): void {
     select.innerHTML = '';
     
-    // Fix: Allow new project when new role is selected
-    if (!roleId || (roleId !== 'new_role' && roleId === undefined)) {
+    if (!roleId) {
       const option = document.createElement('option');
       option.textContent = 'Select a role first';
       option.disabled = true;
@@ -258,21 +142,7 @@ export class BulletFormBuilder {
       return;
     }
     
-    // For new roles, just show new project option
-    if (roleId === 'new_role') {
-      const newOption = document.createElement('option');
-      newOption.value = 'new_project';
-      newOption.textContent = '+ New Project';
-      select.appendChild(newOption);
-      return;
-    }
-    
-    const noProjectOption = document.createElement('option');
-    noProjectOption.value = `no_project_${roleId}`;
-    noProjectOption.textContent = 'No Project';
-    noProjectOption.selected = selectedId === `no_project_${roleId}`;
-    select.appendChild(noProjectOption);
-    
+    // Add projects for the selected role
     this.projects.filter(p => p.roleId === roleId).forEach(project => {
       const option = document.createElement('option');
       option.value = project.id;
@@ -281,38 +151,43 @@ export class BulletFormBuilder {
       select.appendChild(option);
     });
     
-    const newOption = document.createElement('option');
-    newOption.value = 'new_project';
-    newOption.textContent = '+ New Project';
-    select.appendChild(newOption);
+    if (this.projects.filter(p => p.roleId === roleId).length === 0) {
+      const option = document.createElement('option');
+      option.textContent = 'No projects available';
+      option.disabled = true;
+      select.appendChild(option);
+    }
   }
 
-  private updateQualityPreview(form: HTMLElement, text: string): void {
-    const preview = form.querySelector('.quality-preview') as HTMLElement;
-    const features = this.validator.analyzeFeatures(text);
+  /**
+   * Update character counter (implemented locally)
+   */
+  private updateCharCounter(text: string, counter: HTMLElement): void {
+    const length = text.length;
+    const maxLength = 500;
     
-    preview.innerHTML = '';
-    [
-      { key: 'hasNumbers', label: 'Contains Numbers', active: features.hasNumbers },
-      { key: 'actionVerb', label: 'Strong Action Verb', active: features.actionVerb },
-      { key: 'lengthOk', label: 'Good Length', active: features.lengthOk }
-    ].forEach(indicator => {
-      const badge = createSafeElement('span', indicator.label, 
-        `quality-indicator ${indicator.active ? 'quality-indicator--active' : 'quality-indicator--inactive'}`);
-      preview.appendChild(badge);
-    });
+    setSafeTextContent(counter, `${length}/${maxLength} characters`);
+    
+    if (length > maxLength * 0.9) {
+      counter.className = 'char-counter char-counter--warning';
+    } else if (length > maxLength) {
+      counter.className = 'char-counter char-counter--error';
+    } else {
+      counter.className = 'char-counter';
+    }
   }
 
   private getFormData(form: HTMLElement): any {
     return {
       roleId: (form.querySelector('#bullet-role') as HTMLSelectElement).value,
       projectId: (form.querySelector('#bullet-project') as HTMLSelectElement).value,
-      text: (form.querySelector('#bullet-text') as HTMLTextAreaElement).value.trim(),
-      newRoleTitle: (form.querySelector('#new-role-title') as HTMLInputElement)?.value.trim(),
-      newRoleCompany: (form.querySelector('#new-role-company') as HTMLInputElement)?.value.trim(),
-      newProjectName: (form.querySelector('#new-project-name') as HTMLInputElement)?.value.trim(),
-      newProjectDescription: (form.querySelector('#new-project-description') as HTMLTextAreaElement)?.value.trim()
+      text: (form.querySelector('#bullet-text') as HTMLTextAreaElement).value.trim()
     };
+  }
+
+  private validateFormData(data: any): { isValid: boolean; errors: string[] } {
+    const validator = getBulletValidator();
+    return validator.validateBullet(data);
   }
 
   private async loadData(): Promise<void> {
