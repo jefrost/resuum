@@ -5,7 +5,6 @@
 
 import { 
     createSafeElement, 
-    setSafeTextContent, 
     createErrorElement,
     createSuccessElement 
   } from './xss-safe-rendering';
@@ -344,23 +343,6 @@ private async loadExperienceTab(): Promise<void> {
         
       } catch (error) {
         this.showError(`Failed to load settings tab: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      }
-    }
-    
-    /**
-     * Generate recommendations (placeholder)
-     */
-    private async generateRecommendations(): Promise<void> {
-      try {
-        this.showLoading('Generating recommendations...');
-        
-        // TODO: Implement actual recommendation generation
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        this.showSuccess('Recommendations generated successfully');
-        
-      } catch (error) {
-        this.showError(`Failed to generate recommendations: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
     }
     

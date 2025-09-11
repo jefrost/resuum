@@ -3,7 +3,7 @@
  */
 
 import { getAll, create, update, getById } from '../storage/transactions';
-import { createSafeElement, setSafeTextContent } from './xss-safe-rendering';
+import { createSafeElement } from './xss-safe-rendering';
 import { createId } from '../utils/uuid';
 import type { Project, Role } from '../types';
 

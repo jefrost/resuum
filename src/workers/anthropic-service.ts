@@ -1,23 +1,13 @@
 /**
- * AI Service (OpenAI Implementation)
- * Browser-compatible API service with provider abstraction
+ * Anthropic API Service (renamed from OpenAI for Anthropic compatibility)
+ * Handles API key management and Anthropic API calls with proper error handling
  */
 
 import { getSetting, setSetting } from '../storage/transactions';
 import type { OpenAIEmbeddingResponse } from '../types';
 
 // ============================================================================
-// Provider Interface (for future abstraction)
-// ============================================================================
-
-export interface AIProvider {
-  name: string;
-  supportsBrowserFetch: boolean;
-  supportsEmbeddings: boolean;
-}
-
-// ============================================================================
-// Error Types
+// Error Types for Normalized Error Handling
 // ============================================================================
 
 export enum OpenAIErrorCode {
@@ -41,18 +31,14 @@ export interface OpenAIError extends Error {
 // Constants
 // ============================================================================
 
-export const DEFAULT_CHAT_MODEL = 'gpt-4o-mini';
-const OPENAI_API_VERSION = '2024-02-15';
+export const DEFAULT_CHAT_MODEL = 'claude-3-haiku-20240307'; // Fast and cost-effective
+const ANTHROPIC_API_VERSION = '2023-06-01';
 
 // ============================================================================
-// OpenAI Service Class
+// Anthropic Service Class (keeping OpenAI name for compatibility)
 // ============================================================================
 
-export class OpenAIService implements AIProvider {
-  name = 'OpenAI';
-  supportsBrowserFetch = true;
-  supportsEmbeddings = true;
-  
+export class OpenAIService {
   private apiKey: string | null = null;
   private isInitialized: boolean = false;
 
@@ -63,7 +49,7 @@ export class OpenAIService implements AIProvider {
     if (this.isInitialized) return;
     
     try {
-      const storedKey = await getSetting('openai_api_key');
+      const storedKey = await getSetting('openai_api_key'); // Keep same storage key
       if (storedKey && typeof storedKey === 'string') {
         this.apiKey = storedKey;
       }
@@ -82,26 +68,27 @@ export class OpenAIService implements AIProvider {
       throw new Error('Invalid API key provided');
     }
 
-    // Validate OpenAI API key format
-    if (!apiKey.startsWith('sk-')) {
-      console.warn('API key does not start with "sk-" - may not be a standard OpenAI key');
+    // Validate Anthropic API key format
+    if (!apiKey.startsWith('sk-ant-')) {
+      console.warn('API key does not start with "sk-ant-" - may not be a standard Anthropic key');
     }
 
     this.apiKey = apiKey;
     
     try {
-      await setSetting('openai_api_key', apiKey);
+      await setSetting('openai_api_key', apiKey); // Keep same storage key
     } catch (error) {
       console.error('Failed to save API key to storage:', error);
+      // Continue anyway - key is set in memory
     }
   }
 
   /**
-   * Get current API key
+   * Get current API key (throws if not set)
    */
   getApiKey(): string {
     if (!this.apiKey) {
-      throw this.createError(OpenAIErrorCode.NO_KEY, 'OpenAI API key not set');
+      throw this.createError(OpenAIErrorCode.NO_KEY, 'Anthropic API key not set');
     }
     return this.apiKey;
   }
@@ -120,35 +107,41 @@ export class OpenAIService implements AIProvider {
     this.apiKey = null;
     
     try {
-      await setSetting('openai_api_key', '');
+      await setSetting('openai_api_key', ''); // Keep same storage key
     } catch (error) {
       console.error('Failed to clear API key from storage:', error);
     }
   }
 
   /**
-   * Test API key validity
+   * Test API key validity with configurable model
    */
   async testApiKey(model?: string): Promise<{ isValid: boolean; error?: string }> {
     if (!this.hasApiKey()) {
       return { isValid: false, error: 'No API key set' };
     }
 
+    const originalKey = this.apiKey; // Store original key
+
     try {
+      // Use configurable model for testing
       await this.createChatCompletion({
         model: model || DEFAULT_CHAT_MODEL,
         messages: [{ role: 'user', content: 'Hi' }],
-        max_tokens: 5,
+        max_tokens: 10,
         temperature: 0
       });
       
       return { isValid: true };
     } catch (error) {
+      // Don't clear the key in memory on test failure
+      this.apiKey = originalKey;
+      
       if (error instanceof Error && 'code' in error) {
-        const openAIError = error as OpenAIError;
+        const anthropicError = error as OpenAIError;
         return { 
           isValid: false, 
-          error: this.getErrorMessage(openAIError.code)
+          error: this.getErrorMessage(anthropicError.code)
         };
       }
       return { 
@@ -159,37 +152,42 @@ export class OpenAIService implements AIProvider {
   }
 
   /**
-   * Create chat completion with OpenAI API
+   * Create chat completion with Anthropic API
    */
   async createChatCompletion(params: {
     model?: string;
     messages: Array<{ role: string; content: string }>;
     temperature?: number;
     max_tokens?: number;
-    response_format?: any;
+    response_format?: any; // Ignored for Anthropic
   }): Promise<any> {
     if (!this.hasApiKey()) {
-      throw this.createError(OpenAIErrorCode.NO_KEY, 'OpenAI API key is required');
+      throw this.createError(OpenAIErrorCode.NO_KEY, 'Anthropic API key is required');
     }
+
+    // Convert OpenAI-style messages to Anthropic format
+    const systemMessage = params.messages.find(m => m.role === 'system');
+    const userMessages = params.messages.filter(m => m.role === 'user' || m.role === 'assistant');
 
     const requestBody: any = {
       model: params.model || DEFAULT_CHAT_MODEL,
-      messages: params.messages,
+      max_tokens: params.max_tokens ?? 1000,
       temperature: params.temperature ?? 0.7,
-      max_tokens: params.max_tokens ?? 1000
+      messages: userMessages
     };
 
-    // Add response format if supported
-    if (params.response_format) {
-      requestBody.response_format = params.response_format;
+    // Add system message if present
+    if (systemMessage) {
+      requestBody.system = systemMessage.content;
     }
 
     try {
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.getApiKey()}`,
           'Content-Type': 'application/json',
+          'anthropic-version': ANTHROPIC_API_VERSION,
         },
         body: JSON.stringify(requestBody)
       });
@@ -198,11 +196,20 @@ export class OpenAIService implements AIProvider {
         throw await this.handleAPIError(response);
       }
 
-      return await response.json();
+      const data = await response.json();
+      
+      // Convert Anthropic response to OpenAI format for compatibility
+      return {
+        choices: [{
+          message: {
+            content: data.content?.[0]?.text || ''
+          }
+        }]
+      };
       
     } catch (error) {
       if (error instanceof Error && 'code' in error) {
-        throw error;
+        throw error; // Already normalized
       }
       throw this.createError(OpenAIErrorCode.NETWORK_ERROR, 
         `Network error: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -210,46 +217,20 @@ export class OpenAIService implements AIProvider {
   }
 
   /**
-   * Create embeddings
+   * Create embeddings - Not supported by Anthropic, throw helpful error
    */
   async createEmbeddings(
     input: string | string[],
     model: string = 'text-embedding-3-small'
   ): Promise<OpenAIEmbeddingResponse> {
-    if (!this.hasApiKey()) {
-      throw this.createError(OpenAIErrorCode.NO_KEY, 'OpenAI API key is required');
-    }
-
-    try {
-      const response = await fetch('https://api.openai.com/v1/embeddings', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.getApiKey()}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model,
-          input,
-        }),
-      });
-
-      if (!response.ok) {
-        throw await this.handleAPIError(response);
-      }
-
-      return await response.json();
-      
-    } catch (error) {
-      if (error instanceof Error && 'code' in error) {
-        throw error;
-      }
-      throw this.createError(OpenAIErrorCode.NETWORK_ERROR, 
-        `Network error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
+    throw this.createError(
+      OpenAIErrorCode.UNSUPPORTED_FORMAT, 
+      'Embeddings not supported with Anthropic API. Consider using a hybrid approach with OpenAI for embeddings.'
+    );
   }
 
   /**
-   * Handle API errors
+   * Handle API errors and normalize to internal error codes
    */
   private async handleAPIError(response: Response): Promise<OpenAIError> {
     const retryAfter = response.headers.get('Retry-After');
@@ -258,20 +239,20 @@ export class OpenAIService implements AIProvider {
     try {
       errorData = await response.json();
     } catch {
-      // Ignore JSON parse errors
+      // Ignore JSON parse errors for error responses
     }
 
-    const errorMessage = errorData.error?.message || `HTTP ${response.status}: ${response.statusText}`;
+    const errorMessage = errorData.error?.message || errorData.message || `HTTP ${response.status}: ${response.statusText}`;
 
     switch (response.status) {
       case 401:
       case 403:
-        return this.createError(OpenAIErrorCode.KEY_INVALID, 'Invalid OpenAI API key', response.status);
+        return this.createError(OpenAIErrorCode.KEY_INVALID, 'Invalid Anthropic API key', response.status);
       
       case 404:
         return this.createError(
           OpenAIErrorCode.MODEL_UNAVAILABLE,
-          'Model not available for this key',
+          'Model not available for this key or region',
           response.status
         );
       
@@ -283,15 +264,23 @@ export class OpenAIService implements AIProvider {
           retryAfter ? parseInt(retryAfter) : undefined
         );
       
-      case 400:
+      case 400: {
+        const lowerMessage = errorMessage.toLowerCase();
+        
+        if (lowerMessage.includes('max_tokens') || lowerMessage.includes('too many tokens')) {
+          return this.createError(OpenAIErrorCode.PARSE_ERROR, 
+            'Input too long for the selected model', response.status);
+        }
+        
         return this.createError(OpenAIErrorCode.PARSE_ERROR, errorMessage, response.status);
+      }
       
       case 500:
       case 502:
       case 503:
       case 504:
         return this.createError(OpenAIErrorCode.SERVER_ERROR, 
-          'OpenAI server error. Please try again.', response.status);
+          'Anthropic server error. Please try again.', response.status);
       
       default:
         return this.createError(OpenAIErrorCode.NETWORK_ERROR, errorMessage, response.status);
@@ -324,17 +313,17 @@ export class OpenAIService implements AIProvider {
   private getErrorMessage(code: OpenAIErrorCode): string {
     switch (code) {
       case OpenAIErrorCode.NO_KEY:
-        return 'Please set your OpenAI API key in settings';
+        return 'Please set your Anthropic API key in settings';
       case OpenAIErrorCode.KEY_INVALID:
-        return 'Invalid API key. Please check your OpenAI key in settings';
+        return 'Invalid API key. Please check your Anthropic key in settings';
       case OpenAIErrorCode.MODEL_UNAVAILABLE:
-        return 'Selected model isn\'t available for your account';
+        return 'Selected model isn\'t available for your account. Choose a different model in Settings.';
       case OpenAIErrorCode.RATE_LIMIT:
         return 'Rate limit exceeded. Please wait a moment and try again';
       case OpenAIErrorCode.SERVER_ERROR:
-        return 'OpenAI server error. Please try again in a moment';
+        return 'Anthropic server error. Please try again in a moment';
       case OpenAIErrorCode.UNSUPPORTED_FORMAT:
-        return 'Feature not supported with current model';
+        return 'Feature not supported with Anthropic API';
       case OpenAIErrorCode.PARSE_ERROR:
         return 'Error processing response. Please try again';
       case OpenAIErrorCode.NETWORK_ERROR:
@@ -345,12 +334,13 @@ export class OpenAIService implements AIProvider {
   }
 
   /**
-   * Get usage info (placeholder)
+   * Get usage info (placeholder for future implementation)
    */
   async getUsageInfo(): Promise<{
     totalTokens: number;
     estimatedCost: number;
   }> {
+    // TODO: Implement usage tracking for Anthropic
     return {
       totalTokens: 0,
       estimatedCost: 0
@@ -359,13 +349,13 @@ export class OpenAIService implements AIProvider {
 }
 
 // ============================================================================
-// Global Service Instance
+// Global Service Instance (keeping OpenAI names for compatibility)
 // ============================================================================
 
 let globalOpenAIService: OpenAIService | null = null;
 
 /**
- * Get global OpenAI service instance
+ * Get global service instance
  */
 export function getOpenAIService(): OpenAIService {
   if (!globalOpenAIService) {
@@ -375,7 +365,7 @@ export function getOpenAIService(): OpenAIService {
 }
 
 /**
- * Initialize OpenAI service (explicit initialization)
+ * Initialize service (explicit initialization)
  */
 export async function initializeOpenAIService(): Promise<OpenAIService> {
   const service = getOpenAIService();

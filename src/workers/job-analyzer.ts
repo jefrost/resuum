@@ -1,6 +1,6 @@
 /**
  * AI-Powered Job Analysis Service
- * Extracts skills, requirements, and context from job descriptions
+ * Extracts skills, requirements, and context from job descriptions using OpenAI
  */
 
 import { getOpenAIService } from './openai-service';
@@ -19,41 +19,8 @@ interface CachedAnalysis {
 let analysisCache: CachedAnalysis | null = null;
 const CACHE_DURATION = 10 * 60 * 1000; // 10 minutes
 const MAX_INPUT_LENGTH = 8000; // Context length safety
-
-// ============================================================================
-// JSON Schema for Structured Output
-// ============================================================================
-
-const JOB_ANALYSIS_SCHEMA = {
-  type: "object",
-  properties: {
-    extractedSkills: {
-      type: "array",
-      items: { type: "string" },
-      description: "8-12 key skills mentioned or implied in the job posting"
-    },
-    keyRequirements: {
-      type: "array", 
-      items: { type: "string" },
-      description: "5-8 essential requirements for the role"
-    },
-    roleLevel: {
-      type: "string",
-      enum: ["entry", "mid", "senior", "executive"],
-      description: "Experience level based on title and requirements"
-    },
-    functionType: {
-      type: "string",
-      description: "Primary function area (e.g., Product Management, Strategy, Engineering)"
-    },
-    companyContext: {
-      type: "string",
-      description: "Brief description of company/industry context if mentioned"
-    }
-  },
-  required: ["extractedSkills", "keyRequirements", "roleLevel", "functionType"],
-  additionalProperties: false
-};
+const MODEL = 'gpt-4o-mini';
+const PROMPT_VERSION = 'v4'; // Updated for OpenAI
 
 // ============================================================================
 // Job Analyzer Class
@@ -61,14 +28,17 @@ const JOB_ANALYSIS_SCHEMA = {
 
 export class JobAnalyzer {
   /**
-   * Analyze job description using AI to extract skills and requirements
+   * Analyze job description using OpenAI to extract skills and requirements
    */
   async analyzeJob(
     title: string,
     description: string
   ): Promise<JobAnalysis> {
-    // Check cache first
-    const cacheKey = `${title}|${description}`;
+    // Truncate description for caching and API calls
+    const truncatedDescription = this.truncateDescription(description);
+    
+    // Check cache first (include model and prompt version)
+    const cacheKey = `${MODEL}|${PROMPT_VERSION}|${title.trim()}|${truncatedDescription}`;
     const cached = this.getCachedAnalysis(cacheKey);
     if (cached) {
       return cached;
@@ -85,7 +55,7 @@ export class JobAnalyzer {
     }
     
     try {
-      const analysis = await this.performAIAnalysis(title, description);
+      const analysis = await this.performAIAnalysis(title, truncatedDescription);
       
       // Cache the result
       this.cacheAnalysis(cacheKey, analysis);
@@ -93,154 +63,135 @@ export class JobAnalyzer {
       return analysis;
       
     } catch (error) {
-      throw new Error(`Job analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // Preserve structured error codes
+      if (error && typeof (error as any).code === 'string') {
+        throw error;
+      }
+      const wrappedError = new Error(`Job analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      (wrappedError as any).code = 'ERR_ANALYZER';
+      throw wrappedError;
     }
   }
 
   /**
-   * Perform AI-powered analysis with structured output
+   * Truncate description with section-aware logic
    */
-  private async performAIAnalysis(title: string, description: string): Promise<JobAnalysis> {
+  private truncateDescription(description: string): string {
+    if (description.length <= MAX_INPUT_LENGTH) {
+      return description;
+    }
+
+    const sections = ['requirements', 'qualifications', 'responsibilities', 'skills', 'experience'];
+    const sectionRegex = new RegExp(`(${sections.join('|')})`, 'gi');
+
+    const firstSectionIndex = description.search(sectionRegex);
+    if (firstSectionIndex >= 0) {
+      const fromFirstSection = description.substring(firstSectionIndex);
+      if (fromFirstSection.length <= MAX_INPUT_LENGTH) {
+        return fromFirstSection;
+      }
+      return fromFirstSection.substring(0, MAX_INPUT_LENGTH) + '...';
+    }
+
+    return description.substring(0, MAX_INPUT_LENGTH) + '...';
+  }
+
+  /**
+   * Perform AI-powered analysis with OpenAI (simple JSON format)
+   */
+  private async performAIAnalysis(title: string, truncatedDescription: string): Promise<JobAnalysis> {
     const openaiService = getOpenAIService();
     
-    // Truncate description if too long to prevent context overflow
-    const truncatedDescription = description.length > MAX_INPUT_LENGTH 
-      ? description.substring(0, MAX_INPUT_LENGTH) + '...'
-      : description;
-    
-    const prompt = `Analyze this job posting and extract structured information:
+    const prompt = `Analyze this job posting and extract structured information. Return ONLY valid JSON with no other text.
 
 JOB TITLE: ${title}
 
 JOB DESCRIPTION:
 ${truncatedDescription}
 
-Extract key skills, requirements, role level, function type, and company context. Focus on:
-- Technical and soft skills that would be valuable
-- Experience requirements and qualifications  
-- Responsibilities that indicate required capabilities
-- Leadership, analytical, communication, and domain-specific skills
-- Consider the role title context when interpreting requirements`;
+Return a JSON object with exactly these fields:
+{
+  "extractedSkills": ["skill1", "skill2", ...],
+  "keyRequirements": ["requirement1", "requirement2", ...],
+  "roleLevel": "entry|mid|senior|executive",
+  "functionType": "string",
+  "companyContext": "string"
+}
 
-    const maxRetries = 3;
-    let lastError: Error | null = null;
+Focus on:
+- 8-12 key skills mentioned or implied
+- 5-8 essential requirements for the role
+- Experience level based on title and requirements
+- Primary function area (e.g., "Product Management", "Strategy", "Engineering")
+- Brief company/industry context if mentioned
 
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        const response = await fetch('https://api.openai.com/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${openaiService.getApiKey()}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: 'gpt-4o-mini',
-            messages: [
-              {
-                role: 'system',
-                content: 'You must return JSON matching the provided schema. No extra text.'
-              },
-              {
-                role: 'user',
-                content: prompt
-              }
-            ],
-            temperature: 0, // Deterministic for extraction
-            max_tokens: 800,
-            response_format: {
-              type: "json_schema",
-              json_schema: {
-                name: "JobAnalysis",
-                strict: true,
-                schema: JOB_ANALYSIS_SCHEMA
-              }
-            }
-          })
-        });
+Return ONLY the JSON object, no explanations or additional text.`;
 
-        if (!response.ok) {
-          if (response.status === 429) {
-            // Rate limited - wait and retry
-            const retryAfter = response.headers.get('Retry-After');
-            const waitTime = retryAfter ? parseInt(retryAfter) * 1000 : Math.pow(2, attempt) * 1000;
-            await this.sleep(waitTime);
-            continue;
-          } else if (response.status >= 500) {
-            // Server error - retry with backoff
-            if (attempt < maxRetries) {
-              await this.sleep(Math.pow(2, attempt) * 1000);
-              continue;
-            }
+    try {
+      const response = await openaiService.createChatCompletion({
+        model: MODEL,
+        messages: [
+          {
+            role: 'user',
+            content: prompt
           }
-          
-          throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
-        }
+        ],
+        temperature: 0,
+        max_tokens: 800
+      });
 
-        const data = await response.json();
-        const content = data.choices[0]?.message?.content;
-        
-        if (!content) {
-          throw new Error('No analysis content received from OpenAI');
-        }
-
-        // Parse JSON response
-        const analysisData = JSON.parse(content);
-        
-        // Validate required fields exist
-        if (!analysisData.extractedSkills || !analysisData.keyRequirements || !analysisData.roleLevel) {
-          throw new Error('Invalid response structure from AI');
-        }
-        
-        // Construct full analysis object
-        const analysis: JobAnalysis = {
-          title: title.trim(),
-          description: description.trim(),
-          extractedSkills: analysisData.extractedSkills || [],
-          keyRequirements: analysisData.keyRequirements || [],
-          roleLevel: analysisData.roleLevel || 'mid',
-          functionType: analysisData.functionType || 'General',
-          companyContext: analysisData.companyContext || undefined
-        };
-
-        return analysis;
-        
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error('Unknown error');
-        
-        if (error instanceof SyntaxError && attempt < maxRetries) {
-          // JSON parse failed - retry once with previous output quoted
-          await this.sleep(1000);
-          continue;
-        }
-        
-        if (attempt < maxRetries && this.isRetryableError(error)) {
-          await this.sleep(Math.pow(2, attempt) * 1000);
-          continue;
-        }
-        
-        throw lastError;
+      const content = response.choices[0]?.message?.content;
+      
+      if (!content) {
+        throw new Error('No analysis content received from OpenAI');
       }
+
+      // Parse JSON response with fallback handling
+      const analysisData = this.parseJSONResponse(content);
+      
+      // Validate required fields exist
+      if (!analysisData.extractedSkills || !analysisData.keyRequirements || !analysisData.roleLevel) {
+        throw new Error('Invalid response structure from AI');
+      }
+      
+      // Construct full analysis object
+      const analysis: JobAnalysis = {
+        title: title.trim(),
+        description: truncatedDescription.trim(),
+        extractedSkills: analysisData.extractedSkills || [],
+        keyRequirements: analysisData.keyRequirements || [],
+        roleLevel: analysisData.roleLevel || 'mid',
+        functionType: analysisData.functionType || 'General',
+        companyContext: analysisData.companyContext || undefined
+      };
+
+      return analysis;
+        
+    } catch (error) {
+      throw new Error(`Analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
-    
-    throw lastError || new Error('All retry attempts failed');
   }
 
   /**
-   * Check if error is retryable
+   * Parse JSON response with fallback handling
    */
-  private isRetryableError(error: any): boolean {
-    const message = error.message?.toLowerCase() || '';
-    return message.includes('network') || 
-           message.includes('timeout') || 
-           message.includes('connection') ||
-           message.includes('5');
-  }
-
-  /**
-   * Sleep utility for retry backoff
-   */
-  private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+  private parseJSONResponse(content: string): any {
+    // Try direct JSON parse first
+    try {
+      return JSON.parse(content);
+    } catch (e) {
+      // Fallback: Look for JSON in response
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        try {
+          return JSON.parse(jsonMatch[0]);
+        } catch (e2) {
+          // If all else fails, throw original error
+          throw new SyntaxError('Could not parse JSON from response');
+        }
+      }
+      throw new SyntaxError('No JSON found in response');
+    }
   }
 
   /**

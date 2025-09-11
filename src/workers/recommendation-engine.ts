@@ -1,23 +1,30 @@
 /**
  * Recommendation Engine
- * AI-powered bullet point recommendations (placeholder for Step 10 implementation)
+ * AI-powered bullet point recommendations using Claude
  */
 
 import { getAll } from '../storage/transactions';
-import { getJobAnalyzer } from './job-analyzer';
-import type { Role, Project, Bullet, JobAnalysis, RecommendationResult, RoleResult, BulletResult } from '../types';
+import { ClaudeRankingEngine } from './claude-ranking-engine';
+import type { Role, Project, Bullet, RecommendationResult, RoleResult, BulletResult } from '../types';
 
 // ============================================================================
 // Recommendation Engine Class
 // ============================================================================
 
 export class RecommendationEngine {
+  private claudeEngine: ClaudeRankingEngine;
+
+  constructor() {
+    this.claudeEngine = new ClaudeRankingEngine();
+  }
+
   /**
    * Generate recommendations for a job application
    */
   async generateRecommendations(
     jobTitle: string,
-    jobDescription: string
+    jobDescription: string,
+    onProgress?: (stage: string, progress: number) => void
   ): Promise<RecommendationResult> {
     const startTime = Date.now();
     
@@ -30,23 +37,32 @@ export class RecommendationEngine {
     await this.validateUserHasExperience();
     
     try {
-      // Step 1: Analyze job requirements using AI
-      const jobAnalysis = await this.analyzeJobRequirements(jobTitle, jobDescription);
+      onProgress?.('Loading experience data...', 0.05);
       
-      // Step 2: Load user's experience data
+      // Load user's experience data
       const experienceData = await this.loadExperienceData();
       
-      // Step 3: Evaluate bullets against job requirements using AI
-      const evaluatedBullets = await this.evaluateBullets(jobAnalysis, experienceData);
+      onProgress?.('Starting AI analysis...', 0.1);
       
-      // Step 4: Select best bullets for each role respecting limits
-      const roleResults = await this.selectOptimalBullets(evaluatedBullets, experienceData.roles);
+      // Use Claude ranking engine for the heavy lifting
+      const scoredBullets = await this.claudeEngine.rankBullets(
+        jobTitle,
+        jobDescription,
+        experienceData.bullets,
+        experienceData.roles,
+        onProgress
+      );
+      
+      onProgress?.('Organizing results...', 0.95);
+      
+      // Convert to expected result format
+      const roleResults = this.convertToRoleResults(scoredBullets, experienceData);
       
       const processingTime = (Date.now() - startTime) / 1000;
       
       return {
         jobTitle: jobTitle.trim(),
-        totalBullets: roleResults.reduce((sum, role) => sum + role.selectedBullets.length, 0),
+        totalBullets: scoredBullets.length,
         processingTime,
         roleResults
       };
@@ -65,17 +81,13 @@ export class RecommendationEngine {
       getAll<Bullet>('bullets')
     ]);
     
-    if (roles.length === 0 || bullets.length === 0) {
-      throw new Error('You must add experience first. Please add roles and bullet points in the Experience tab before generating recommendations.');
+    if (roles.length === 0) {
+      throw new Error('You must add roles first. Please add your work experience in the Experience tab.');
     }
-  }
-
-  /**
-   * Analyze job requirements using AI
-   */
-  private async analyzeJobRequirements(title: string, description: string): Promise<JobAnalysis> {
-    const jobAnalyzer = getJobAnalyzer();
-    return await jobAnalyzer.analyzeJob(title, description);
+    
+    if (bullets.length === 0) {
+      throw new Error('You must add bullet points first. Please add bullet points for your roles in the Experience tab.');
+    }
   }
 
   /**
@@ -96,109 +108,65 @@ export class RecommendationEngine {
   }
 
   /**
-   * Evaluate bullets against job requirements using AI
-   * TODO: Implement AI-powered bullet evaluation
+   * Convert scored bullets to role-based results format
    */
-  private async evaluateBullets(
-    jobAnalysis: JobAnalysis,
+  private convertToRoleResults(
+    scoredBullets: any[],
     experienceData: { roles: Role[]; projects: Project[]; bullets: Bullet[] }
-  ): Promise<Array<{
-    bullet: Bullet;
-    role: Role;
-    project: Project | null;
-    relevanceScore: number;
-    matchedSkills: string[];
-    reasoning: string;
-  }>> {
-    // TODO: Replace with actual AI evaluation
-    // For now, return mock evaluation data
-    return experienceData.bullets.map(bullet => {
-      const role = experienceData.roles.find(r => r.id === bullet.roleId)!;
-      const project = experienceData.projects.find(p => p.id === bullet.projectId) || null;
-      
-      return {
-        bullet,
-        role,
-        project,
-        relevanceScore: Math.random() * 0.3 + 0.7, // Mock score between 0.7-1.0
-        matchedSkills: jobAnalysis.extractedSkills.slice(0, 2), // Mock matched skills
-        reasoning: 'Mock reasoning - this would be AI-generated explanation of relevance'
-      };
-    });
-  }
-
-  /**
-   * Select optimal bullets for each role respecting limits
-   */
-  private async selectOptimalBullets(
-    evaluatedBullets: Array<{
-      bullet: Bullet;
-      role: Role;
-      project: Project | null;
-      relevanceScore: number;
-      matchedSkills: string[];
-      reasoning: string;
-    }>,
-    roles: Role[]
-  ): Promise<RoleResult[]> {
+  ): RoleResult[] {
     const roleResults: RoleResult[] = [];
     
-    for (const role of roles) {
-      const roleBullets = evaluatedBullets
-        .filter(eb => eb.role.id === role.id)
-        .sort((a, b) => b.relevanceScore - a.relevanceScore) // Sort by relevance descending
-        .slice(0, role.bulletsLimit); // Respect role bullet limit
-      
-      if (roleBullets.length > 0) {
-        const selectedBullets: BulletResult[] = roleBullets.map(eb => ({
-          bulletId: eb.bullet.id,
-          text: eb.bullet.text,
-          relevanceScore: eb.relevanceScore,
-          projectName: eb.project?.name || 'Unknown Project',
-          matchedSkills: eb.matchedSkills
-        }));
-        
-        const projectsUsed = [...new Set(roleBullets
-          .map(eb => eb.project?.name)
-          .filter(name => name)
-        )] as string[];
-        
-        const avgRelevance = roleBullets.reduce((sum, eb) => sum + eb.relevanceScore, 0) / roleBullets.length;
-        
-        roleResults.push({
-          roleId: role.id,
-          roleTitle: `${role.title} at ${role.company}`,
-          selectedBullets,
-          projectsUsed,
-          avgRelevance
-        });
+    // Group scored bullets by role
+    const bulletsByRole = new Map<string, any[]>();
+    for (const scoredBullet of scoredBullets) {
+      if (!bulletsByRole.has(scoredBullet.roleId)) {
+        bulletsByRole.set(scoredBullet.roleId, []);
       }
+      bulletsByRole.get(scoredBullet.roleId)!.push(scoredBullet);
     }
     
-    // Sort role results by average relevance (most relevant first)
-    return roleResults.sort((a, b) => b.avgRelevance - a.avgRelevance);
+    // Create role results
+    for (const [roleId, bullets] of bulletsByRole) {
+      const role = experienceData.roles.find(r => r.id === roleId);
+      if (!role) continue;
+      
+      // Convert to BulletResult format
+      const selectedBullets: BulletResult[] = bullets.map(scoredBullet => {
+        const project = experienceData.projects.find(p => p.id === scoredBullet.projectId);
+        
+        return {
+          bulletId: scoredBullet.bulletId,
+          text: scoredBullet.text,
+          relevanceScore: scoredBullet.normalizedScore,
+          projectName: project?.name || 'Unknown Project',
+          matchedSkills: scoredBullet.skillHits || []
+        };
+      });
+      
+      // Calculate average relevance
+      const avgRelevance = selectedBullets.length > 0 
+        ? selectedBullets.reduce((sum, b) => sum + b.relevanceScore, 0) / selectedBullets.length
+        : 0;
+      
+      // Get unique projects used
+      const projectsUsed = [...new Set(selectedBullets.map(b => b.projectName))];
+      
+      roleResults.push({
+        roleId: role.id,
+        roleTitle: `${role.title} (${role.company})`,
+        selectedBullets,
+        projectsUsed,
+        avgRelevance
+      });
+    }
+    
+    // Sort roles by order index (most recent first)
+    roleResults.sort((a, b) => {
+      const roleA = experienceData.roles.find(r => r.id === a.roleId);
+      const roleB = experienceData.roles.find(r => r.id === b.roleId);
+      return (roleA?.orderIndex || 0) - (roleB?.orderIndex || 0);
+    });
+    
+    return roleResults;
   }
-
-  /**
-   * Refresh recommendations with same job data
-   */
-  async refreshRecommendations(lastJobTitle: string, lastJobDescription: string): Promise<RecommendationResult> {
-    return this.generateRecommendations(lastJobTitle, lastJobDescription);
-  }
-}
-
-// ============================================================================
-// Global Service Instance
-// ============================================================================
-
-let globalRecommendationEngine: RecommendationEngine | null = null;
-
-/**
- * Get global recommendation engine instance
- */
-export function getRecommendationEngine(): RecommendationEngine {
-  if (!globalRecommendationEngine) {
-    globalRecommendationEngine = new RecommendationEngine();
-  }
-  return globalRecommendationEngine;
 }

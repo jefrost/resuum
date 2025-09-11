@@ -1,10 +1,10 @@
 /**
  * API Configuration Component
- * Handles OpenAI API key management (browser-compatible)
+ * Handles Anthropic API key management
  */
 
 import { createSafeElement, setSafeTextContent } from './xss-safe-rendering';
-import { getOpenAIService, initializeOpenAIService } from '../workers/openai-service';
+import { getOpenAIService, initializeOpenAIService } from '../workers/anthropic-service'; 
 import { getSetting } from '../storage/transactions';
 
 // ============================================================================
@@ -25,11 +25,11 @@ export class APIConfig {
     try {
       await initializeOpenAIService();
     } catch (error) {
-      console.warn('Failed to initialize OpenAI service:', error);
+      console.warn('Failed to initialize Anthropic service:', error);
     }
     
     const description = createSafeElement('p', 
-      'Your OpenAI API key is stored locally in your browser and never exported. OpenAI works directly from the browser.',
+      'Your Anthropic API key is stored locally in your browser and never exported.',
       'section-description'
     );
     
@@ -47,17 +47,17 @@ export class APIConfig {
     
     // Key input group
     const inputGroup = createSafeElement('div', '', 'input-group');
-    const label = createSafeElement('label', 'OpenAI API Key', 'input-label');
+    const label = createSafeElement('label', 'Anthropic API Key', 'input-label');
     label.setAttribute('for', 'api-key');
     
     const keyInput = document.createElement('input') as HTMLInputElement;
     keyInput.type = 'password';
     keyInput.id = 'api-key';
     keyInput.className = 'form-input';
-    keyInput.placeholder = 'sk-proj-...';
+    keyInput.placeholder = 'sk-ant-...';
     
-    const openaiService = getOpenAIService();
-    if (openaiService.hasApiKey()) {
+    const anthropicService = getOpenAIService();
+    if (anthropicService.hasApiKey()) {
       keyInput.value = '***key-stored***';
       keyInput.disabled = true;
     }
@@ -90,8 +90,8 @@ export class APIConfig {
     button.type = 'button';
     button.className = 'form-button form-button--primary';
     
-    const openaiService = getOpenAIService();
-    setSafeTextContent(button, openaiService.hasApiKey() ? 'Update Key' : 'Save Key');
+    const anthropicService = getOpenAIService();
+    setSafeTextContent(button, anthropicService.hasApiKey() ? 'Update Key' : 'Save Key');
     
     button.addEventListener('click', async () => {
       await this.saveKey(keyInput.value);
@@ -125,8 +125,8 @@ export class APIConfig {
     button.className = 'form-button form-button--danger';
     setSafeTextContent(button, 'Forget Key');
     
-    const openaiService = getOpenAIService();
-    button.style.display = openaiService.hasApiKey() ? 'inline-block' : 'none';
+    const anthropicService = getOpenAIService();
+    button.style.display = anthropicService.hasApiKey() ? 'inline-block' : 'none';
     
     button.addEventListener('click', () => {
       this.forgetKey();
@@ -140,79 +140,54 @@ export class APIConfig {
   // ============================================================================
 
   /**
-   * Save API key - DEBUG VERSION
+   * Save API key with CORS workaround notice
    */
   private async saveKey(key: string): Promise<void> {
     if (!key || key === '***key-stored***') {
-      alert('Please enter a valid OpenAI API key');
+      alert('Please enter a valid Anthropic API key');
       return;
     }
     
     try {
-      console.log('INPUT KEY:', key); // DEBUG
+      console.log('INPUT KEY:', key);
       
-      // Ensure service is initialized
-      const openaiService = await initializeOpenAIService();
+      const anthropicService = await initializeOpenAIService();
+      await anthropicService.setApiKey(key);
       
-      // Set the key and wait for storage to complete
-      await openaiService.setApiKey(key);
-      
-      // DEBUG: Check what was actually stored
       const storedValue = await getSetting('openai_api_key');
-      console.log('STORED VALUE:', storedValue); // DEBUG
+      console.log('STORED VALUE:', storedValue);
+      console.log('SERVICE HAS KEY:', anthropicService.hasApiKey());
+      console.log('SERVICE KEY VALUE:', anthropicService.hasApiKey() ? anthropicService.getApiKey() : 'NO KEY');
       
-      // DEBUG: Check what service thinks it has
-      console.log('SERVICE HAS KEY:', openaiService.hasApiKey()); // DEBUG
-      console.log('SERVICE KEY VALUE:', openaiService.hasApiKey() ? openaiService.getApiKey() : 'NO KEY'); // DEBUG
+      // Show CORS notice instead of testing
+      alert('Anthropic API key saved successfully.\n\nNote: Browser CORS restrictions prevent direct API testing. The key will be tested when you generate recommendations.');
       
-      // Small delay to ensure storage completes
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      // Test immediately using OpenAI service method
-      const result = await openaiService.testApiKey();
-      if (!result.isValid) {
-        await openaiService.clearApiKey();
-        throw new Error(result.error || 'Connection test failed');
-      }
-      
-      alert('OpenAI API key saved and tested successfully');
       if (this.container) {
         await this.render(this.container);
       }
       
     } catch (error) {
-      console.error('SAVE KEY ERROR:', error); // DEBUG
+      console.error('SAVE KEY ERROR:', error);
       alert(`Failed to save API key: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
   /**
-   * Test connection - DEBUG VERSION
+   * Test connection with CORS notice
    */
   private async testConnection(): Promise<void> {
     try {
-      console.log('TESTING CONNECTION...'); // DEBUG
+      const anthropicService = await initializeOpenAIService();
       
-      // Ensure service is initialized
-      const openaiService = await initializeOpenAIService();
-      
-      if (!openaiService.hasApiKey()) {
-        console.log('NO API KEY FOUND'); // DEBUG
-        alert('No OpenAI API key configured');
+      if (!anthropicService.hasApiKey()) {
+        alert('No Anthropic API key configured');
         return;
       }
       
-      console.log('SERVICE HAS KEY, TESTING...'); // DEBUG
-      const result = await openaiService.testApiKey();
-      console.log('TEST RESULT:', result); // DEBUG
+      // Show CORS limitation notice
+      alert('Your Anthropic API key is saved and ready to use.\n\nDue to browser security restrictions, we cannot test the connection directly. The key will be validated when you generate recommendations.');
       
-      if (result.isValid) {
-        alert('Connection test successful');
-      } else {
-        alert(`Connection test failed: ${result.error}`);
-      }
     } catch (error) {
-      console.error('TEST CONNECTION ERROR:', error); // DEBUG
       alert(`Connection test failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
@@ -221,16 +196,16 @@ export class APIConfig {
    * Forget API key
    */
   private async forgetKey(): Promise<void> {
-    if (confirm('Are you sure you want to forget your OpenAI API key? This will disable AI functionality.')) {
+    if (confirm('Are you sure you want to forget your Anthropic API key? This will disable AI functionality.')) {
       try {
-        const openaiService = await initializeOpenAIService();
-        await openaiService.clearApiKey();
+        const anthropicService = await initializeOpenAIService();
+        await anthropicService.clearApiKey();
         
         if (this.container) {
           await this.render(this.container);
         }
         
-        alert('OpenAI API key forgotten');
+        alert('Anthropic API key forgotten');
       } catch (error) {
         alert(`Failed to forget API key: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }

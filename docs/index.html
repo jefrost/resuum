@@ -584,6 +584,14 @@ var Resuum = (() => {
       });
     });
   }
+  async function getSetting(key) {
+    const setting = await getById("settings", key);
+    return setting?.value || null;
+  }
+  async function setSetting(key, value) {
+    const setting = { key, value };
+    await update("settings", setting);
+  }
   var init_transactions = __esm({
     "src/storage/transactions.ts"() {
       "use strict";
@@ -2075,14 +2083,1389 @@ ${role.company}` : "Unknown Role"
 
   // src/ui/application-tab.ts
   init_xss_safe_rendering();
+
+  // src/workers/recommendation-engine.ts
+  init_transactions();
+
+  // src/workers/openai-service.ts
+  init_transactions();
+  var DEFAULT_CHAT_MODEL = "gpt-4o-mini";
+  var OpenAIService = class {
+    name = "OpenAI";
+    supportsBrowserFetch = true;
+    supportsEmbeddings = true;
+    apiKey = null;
+    isInitialized = false;
+    /**
+     * Initialize service and load API key from storage
+     */
+    async initialize() {
+      if (this.isInitialized) return;
+      try {
+        const storedKey = await getSetting("openai_api_key");
+        if (storedKey && typeof storedKey === "string") {
+          this.apiKey = storedKey;
+        }
+        this.isInitialized = true;
+      } catch (error) {
+        console.warn("Failed to load API key from storage:", error);
+        this.isInitialized = true;
+      }
+    }
+    /**
+     * Set API key and save to storage
+     */
+    async setApiKey(apiKey) {
+      if (!apiKey || typeof apiKey !== "string") {
+        throw new Error("Invalid API key provided");
+      }
+      if (!apiKey.startsWith("sk-")) {
+        console.warn('API key does not start with "sk-" - may not be a standard OpenAI key');
+      }
+      this.apiKey = apiKey;
+      try {
+        await setSetting("openai_api_key", apiKey);
+      } catch (error) {
+        console.error("Failed to save API key to storage:", error);
+      }
+    }
+    /**
+     * Get current API key
+     */
+    getApiKey() {
+      if (!this.apiKey) {
+        throw this.createError("ERR_NO_KEY" /* NO_KEY */, "OpenAI API key not set");
+      }
+      return this.apiKey;
+    }
+    /**
+     * Check if API key is set
+     */
+    hasApiKey() {
+      return this.apiKey !== null && this.apiKey.length > 0;
+    }
+    /**
+     * Clear API key from memory and storage
+     */
+    async clearApiKey() {
+      this.apiKey = null;
+      try {
+        await setSetting("openai_api_key", "");
+      } catch (error) {
+        console.error("Failed to clear API key from storage:", error);
+      }
+    }
+    /**
+     * Test API key validity
+     */
+    async testApiKey(model) {
+      if (!this.hasApiKey()) {
+        return { isValid: false, error: "No API key set" };
+      }
+      try {
+        await this.createChatCompletion({
+          model: model || DEFAULT_CHAT_MODEL,
+          messages: [{ role: "user", content: "Hi" }],
+          max_tokens: 5,
+          temperature: 0
+        });
+        return { isValid: true };
+      } catch (error) {
+        if (error instanceof Error && "code" in error) {
+          const openAIError = error;
+          return {
+            isValid: false,
+            error: this.getErrorMessage(openAIError.code)
+          };
+        }
+        return {
+          isValid: false,
+          error: error instanceof Error ? error.message : "Unknown error"
+        };
+      }
+    }
+    /**
+     * Create chat completion with OpenAI API
+     */
+    async createChatCompletion(params) {
+      if (!this.hasApiKey()) {
+        throw this.createError("ERR_NO_KEY" /* NO_KEY */, "OpenAI API key is required");
+      }
+      const requestBody = {
+        model: params.model || DEFAULT_CHAT_MODEL,
+        messages: params.messages,
+        temperature: params.temperature ?? 0.7,
+        max_tokens: params.max_tokens ?? 1e3
+      };
+      if (params.response_format) {
+        requestBody.response_format = params.response_format;
+      }
+      try {
+        const response = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${this.getApiKey()}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(requestBody)
+        });
+        if (!response.ok) {
+          throw await this.handleAPIError(response);
+        }
+        return await response.json();
+      } catch (error) {
+        if (error instanceof Error && "code" in error) {
+          throw error;
+        }
+        throw this.createError(
+          "ERR_NETWORK" /* NETWORK_ERROR */,
+          `Network error: ${error instanceof Error ? error.message : "Unknown error"}`
+        );
+      }
+    }
+    /**
+     * Create embeddings
+     */
+    async createEmbeddings(input, model = "text-embedding-3-small") {
+      if (!this.hasApiKey()) {
+        throw this.createError("ERR_NO_KEY" /* NO_KEY */, "OpenAI API key is required");
+      }
+      try {
+        const response = await fetch("https://api.openai.com/v1/embeddings", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${this.getApiKey()}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model,
+            input
+          })
+        });
+        if (!response.ok) {
+          throw await this.handleAPIError(response);
+        }
+        return await response.json();
+      } catch (error) {
+        if (error instanceof Error && "code" in error) {
+          throw error;
+        }
+        throw this.createError(
+          "ERR_NETWORK" /* NETWORK_ERROR */,
+          `Network error: ${error instanceof Error ? error.message : "Unknown error"}`
+        );
+      }
+    }
+    /**
+     * Handle API errors
+     */
+    async handleAPIError(response) {
+      const retryAfter = response.headers.get("Retry-After");
+      let errorData = {};
+      try {
+        errorData = await response.json();
+      } catch {
+      }
+      const errorMessage = errorData.error?.message || `HTTP ${response.status}: ${response.statusText}`;
+      switch (response.status) {
+        case 401:
+        case 403:
+          return this.createError("ERR_KEY_INVALID" /* KEY_INVALID */, "Invalid OpenAI API key", response.status);
+        case 404:
+          return this.createError(
+            "ERR_MODEL_UNAVAILABLE" /* MODEL_UNAVAILABLE */,
+            "Model not available for this key",
+            response.status
+          );
+        case 429:
+          return this.createError(
+            "ERR_RATE_LIMIT" /* RATE_LIMIT */,
+            "Rate limit exceeded. Please try again later.",
+            response.status,
+            retryAfter ? parseInt(retryAfter) : void 0
+          );
+        case 400:
+          return this.createError("ERR_PARSE" /* PARSE_ERROR */, errorMessage, response.status);
+        case 500:
+        case 502:
+        case 503:
+        case 504:
+          return this.createError(
+            "ERR_SERVER" /* SERVER_ERROR */,
+            "OpenAI server error. Please try again.",
+            response.status
+          );
+        default:
+          return this.createError("ERR_NETWORK" /* NETWORK_ERROR */, errorMessage, response.status);
+      }
+    }
+    /**
+     * Create normalized error
+     */
+    createError(code, message, status, retryAfter) {
+      const error = new Error(message);
+      error.code = code;
+      if (status !== void 0) {
+        error.status = status;
+      }
+      if (retryAfter !== void 0) {
+        error.retryAfter = retryAfter;
+      }
+      return error;
+    }
+    /**
+     * Get user-friendly error messages
+     */
+    getErrorMessage(code) {
+      switch (code) {
+        case "ERR_NO_KEY" /* NO_KEY */:
+          return "Please set your OpenAI API key in settings";
+        case "ERR_KEY_INVALID" /* KEY_INVALID */:
+          return "Invalid API key. Please check your OpenAI key in settings";
+        case "ERR_MODEL_UNAVAILABLE" /* MODEL_UNAVAILABLE */:
+          return "Selected model isn't available for your account";
+        case "ERR_RATE_LIMIT" /* RATE_LIMIT */:
+          return "Rate limit exceeded. Please wait a moment and try again";
+        case "ERR_SERVER" /* SERVER_ERROR */:
+          return "OpenAI server error. Please try again in a moment";
+        case "ERR_UNSUPPORTED_FORMAT" /* UNSUPPORTED_FORMAT */:
+          return "Feature not supported with current model";
+        case "ERR_PARSE" /* PARSE_ERROR */:
+          return "Error processing response. Please try again";
+        case "ERR_NETWORK" /* NETWORK_ERROR */:
+          return "Network error. Please check your connection and try again";
+        default:
+          return "Unknown error occurred";
+      }
+    }
+    /**
+     * Get usage info (placeholder)
+     */
+    async getUsageInfo() {
+      return {
+        totalTokens: 0,
+        estimatedCost: 0
+      };
+    }
+  };
+  var globalOpenAIService = null;
+  function getOpenAIService() {
+    if (!globalOpenAIService) {
+      globalOpenAIService = new OpenAIService();
+    }
+    return globalOpenAIService;
+  }
+  async function initializeOpenAIService() {
+    const service = getOpenAIService();
+    await service.initialize();
+    return service;
+  }
+
+  // src/workers/job-analyzer.ts
+  var analysisCache = null;
+  var CACHE_DURATION = 10 * 60 * 1e3;
+  var MAX_INPUT_LENGTH = 8e3;
+  var MODEL = "gpt-4o-mini";
+  var PROMPT_VERSION = "v4";
+  var JobAnalyzer = class {
+    /**
+     * Analyze job description using OpenAI to extract skills and requirements
+     */
+    async analyzeJob(title, description) {
+      const truncatedDescription = this.truncateDescription(description);
+      const cacheKey = `${MODEL}|${PROMPT_VERSION}|${title.trim()}|${truncatedDescription}`;
+      const cached = this.getCachedAnalysis(cacheKey);
+      if (cached) {
+        return cached;
+      }
+      if (!title.trim() || !description.trim()) {
+        throw new Error("Job title and description are required");
+      }
+      const openaiService = getOpenAIService();
+      if (!openaiService.hasApiKey()) {
+        throw new Error("OpenAI API key is required for job analysis");
+      }
+      try {
+        const analysis = await this.performAIAnalysis(title, truncatedDescription);
+        this.cacheAnalysis(cacheKey, analysis);
+        return analysis;
+      } catch (error) {
+        if (error && typeof error.code === "string") {
+          throw error;
+        }
+        const wrappedError = new Error(`Job analysis failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+        wrappedError.code = "ERR_ANALYZER";
+        throw wrappedError;
+      }
+    }
+    /**
+     * Truncate description with section-aware logic
+     */
+    truncateDescription(description) {
+      if (description.length <= MAX_INPUT_LENGTH) {
+        return description;
+      }
+      const sections = ["requirements", "qualifications", "responsibilities", "skills", "experience"];
+      const sectionRegex = new RegExp(`(${sections.join("|")})`, "gi");
+      const firstSectionIndex = description.search(sectionRegex);
+      if (firstSectionIndex >= 0) {
+        const fromFirstSection = description.substring(firstSectionIndex);
+        if (fromFirstSection.length <= MAX_INPUT_LENGTH) {
+          return fromFirstSection;
+        }
+        return fromFirstSection.substring(0, MAX_INPUT_LENGTH) + "...";
+      }
+      return description.substring(0, MAX_INPUT_LENGTH) + "...";
+    }
+    /**
+     * Perform AI-powered analysis with OpenAI (simple JSON format)
+     */
+    async performAIAnalysis(title, truncatedDescription) {
+      const openaiService = getOpenAIService();
+      const prompt = `Analyze this job posting and extract structured information. Return ONLY valid JSON with no other text.
+
+JOB TITLE: ${title}
+
+JOB DESCRIPTION:
+${truncatedDescription}
+
+Return a JSON object with exactly these fields:
+{
+  "extractedSkills": ["skill1", "skill2", ...],
+  "keyRequirements": ["requirement1", "requirement2", ...],
+  "roleLevel": "entry|mid|senior|executive",
+  "functionType": "string",
+  "companyContext": "string"
+}
+
+Focus on:
+- 8-12 key skills mentioned or implied
+- 5-8 essential requirements for the role
+- Experience level based on title and requirements
+- Primary function area (e.g., "Product Management", "Strategy", "Engineering")
+- Brief company/industry context if mentioned
+
+Return ONLY the JSON object, no explanations or additional text.`;
+      try {
+        const response = await openaiService.createChatCompletion({
+          model: MODEL,
+          messages: [
+            {
+              role: "user",
+              content: prompt
+            }
+          ],
+          temperature: 0,
+          max_tokens: 800
+        });
+        const content = response.choices[0]?.message?.content;
+        if (!content) {
+          throw new Error("No analysis content received from OpenAI");
+        }
+        const analysisData = this.parseJSONResponse(content);
+        if (!analysisData.extractedSkills || !analysisData.keyRequirements || !analysisData.roleLevel) {
+          throw new Error("Invalid response structure from AI");
+        }
+        const analysis = {
+          title: title.trim(),
+          description: truncatedDescription.trim(),
+          extractedSkills: analysisData.extractedSkills || [],
+          keyRequirements: analysisData.keyRequirements || [],
+          roleLevel: analysisData.roleLevel || "mid",
+          functionType: analysisData.functionType || "General",
+          companyContext: analysisData.companyContext || void 0
+        };
+        return analysis;
+      } catch (error) {
+        throw new Error(`Analysis failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+      }
+    }
+    /**
+     * Parse JSON response with fallback handling
+     */
+    parseJSONResponse(content) {
+      try {
+        return JSON.parse(content);
+      } catch (e) {
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          try {
+            return JSON.parse(jsonMatch[0]);
+          } catch (e2) {
+            throw new SyntaxError("Could not parse JSON from response");
+          }
+        }
+        throw new SyntaxError("No JSON found in response");
+      }
+    }
+    /**
+     * Get cached analysis if still valid
+     */
+    getCachedAnalysis(cacheKey) {
+      if (!analysisCache) return null;
+      const isExpired = Date.now() - analysisCache.timestamp > CACHE_DURATION;
+      if (isExpired) {
+        analysisCache = null;
+        return null;
+      }
+      if (analysisCache.cacheKey === cacheKey) {
+        return analysisCache.analysis;
+      }
+      return null;
+    }
+    /**
+     * Cache analysis result
+     */
+    cacheAnalysis(cacheKey, analysis) {
+      analysisCache = {
+        cacheKey,
+        analysis,
+        timestamp: Date.now()
+      };
+    }
+  };
+  var globalJobAnalyzer = null;
+  function getJobAnalyzer() {
+    if (!globalJobAnalyzer) {
+      globalJobAnalyzer = new JobAnalyzer();
+    }
+    return globalJobAnalyzer;
+  }
+
+  // src/workers/anthropic-service.ts
+  init_transactions();
+  var DEFAULT_CHAT_MODEL2 = "claude-3-haiku-20240307";
+  var ANTHROPIC_API_VERSION = "2023-06-01";
+  var OpenAIService2 = class {
+    apiKey = null;
+    isInitialized = false;
+    /**
+     * Initialize service and load API key from storage
+     */
+    async initialize() {
+      if (this.isInitialized) return;
+      try {
+        const storedKey = await getSetting("openai_api_key");
+        if (storedKey && typeof storedKey === "string") {
+          this.apiKey = storedKey;
+        }
+        this.isInitialized = true;
+      } catch (error) {
+        console.warn("Failed to load API key from storage:", error);
+        this.isInitialized = true;
+      }
+    }
+    /**
+     * Set API key and save to storage
+     */
+    async setApiKey(apiKey) {
+      if (!apiKey || typeof apiKey !== "string") {
+        throw new Error("Invalid API key provided");
+      }
+      if (!apiKey.startsWith("sk-ant-")) {
+        console.warn('API key does not start with "sk-ant-" - may not be a standard Anthropic key');
+      }
+      this.apiKey = apiKey;
+      try {
+        await setSetting("openai_api_key", apiKey);
+      } catch (error) {
+        console.error("Failed to save API key to storage:", error);
+      }
+    }
+    /**
+     * Get current API key (throws if not set)
+     */
+    getApiKey() {
+      if (!this.apiKey) {
+        throw this.createError("ERR_NO_KEY" /* NO_KEY */, "Anthropic API key not set");
+      }
+      return this.apiKey;
+    }
+    /**
+     * Check if API key is set
+     */
+    hasApiKey() {
+      return this.apiKey !== null && this.apiKey.length > 0;
+    }
+    /**
+     * Clear API key from memory and storage
+     */
+    async clearApiKey() {
+      this.apiKey = null;
+      try {
+        await setSetting("openai_api_key", "");
+      } catch (error) {
+        console.error("Failed to clear API key from storage:", error);
+      }
+    }
+    /**
+     * Test API key validity with configurable model
+     */
+    async testApiKey(model) {
+      if (!this.hasApiKey()) {
+        return { isValid: false, error: "No API key set" };
+      }
+      const originalKey = this.apiKey;
+      try {
+        await this.createChatCompletion({
+          model: model || DEFAULT_CHAT_MODEL2,
+          messages: [{ role: "user", content: "Hi" }],
+          max_tokens: 10,
+          temperature: 0
+        });
+        return { isValid: true };
+      } catch (error) {
+        this.apiKey = originalKey;
+        if (error instanceof Error && "code" in error) {
+          const anthropicError = error;
+          return {
+            isValid: false,
+            error: this.getErrorMessage(anthropicError.code)
+          };
+        }
+        return {
+          isValid: false,
+          error: error instanceof Error ? error.message : "Unknown error"
+        };
+      }
+    }
+    /**
+     * Create chat completion with Anthropic API
+     */
+    async createChatCompletion(params) {
+      if (!this.hasApiKey()) {
+        throw this.createError("ERR_NO_KEY" /* NO_KEY */, "Anthropic API key is required");
+      }
+      const systemMessage = params.messages.find((m) => m.role === "system");
+      const userMessages = params.messages.filter((m) => m.role === "user" || m.role === "assistant");
+      const requestBody = {
+        model: params.model || DEFAULT_CHAT_MODEL2,
+        max_tokens: params.max_tokens ?? 1e3,
+        temperature: params.temperature ?? 0.7,
+        messages: userMessages
+      };
+      if (systemMessage) {
+        requestBody.system = systemMessage.content;
+      }
+      try {
+        const response = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${this.getApiKey()}`,
+            "Content-Type": "application/json",
+            "anthropic-version": ANTHROPIC_API_VERSION
+          },
+          body: JSON.stringify(requestBody)
+        });
+        if (!response.ok) {
+          throw await this.handleAPIError(response);
+        }
+        const data = await response.json();
+        return {
+          choices: [{
+            message: {
+              content: data.content?.[0]?.text || ""
+            }
+          }]
+        };
+      } catch (error) {
+        if (error instanceof Error && "code" in error) {
+          throw error;
+        }
+        throw this.createError(
+          "ERR_NETWORK" /* NETWORK_ERROR */,
+          `Network error: ${error instanceof Error ? error.message : "Unknown error"}`
+        );
+      }
+    }
+    /**
+     * Create embeddings - Not supported by Anthropic, throw helpful error
+     */
+    async createEmbeddings(input, model = "text-embedding-3-small") {
+      throw this.createError(
+        "ERR_UNSUPPORTED_FORMAT" /* UNSUPPORTED_FORMAT */,
+        "Embeddings not supported with Anthropic API. Consider using a hybrid approach with OpenAI for embeddings."
+      );
+    }
+    /**
+     * Handle API errors and normalize to internal error codes
+     */
+    async handleAPIError(response) {
+      const retryAfter = response.headers.get("Retry-After");
+      let errorData = {};
+      try {
+        errorData = await response.json();
+      } catch {
+      }
+      const errorMessage = errorData.error?.message || errorData.message || `HTTP ${response.status}: ${response.statusText}`;
+      switch (response.status) {
+        case 401:
+        case 403:
+          return this.createError("ERR_KEY_INVALID" /* KEY_INVALID */, "Invalid Anthropic API key", response.status);
+        case 404:
+          return this.createError(
+            "ERR_MODEL_UNAVAILABLE" /* MODEL_UNAVAILABLE */,
+            "Model not available for this key or region",
+            response.status
+          );
+        case 429:
+          return this.createError(
+            "ERR_RATE_LIMIT" /* RATE_LIMIT */,
+            "Rate limit exceeded. Please try again later.",
+            response.status,
+            retryAfter ? parseInt(retryAfter) : void 0
+          );
+        case 400: {
+          const lowerMessage = errorMessage.toLowerCase();
+          if (lowerMessage.includes("max_tokens") || lowerMessage.includes("too many tokens")) {
+            return this.createError(
+              "ERR_PARSE" /* PARSE_ERROR */,
+              "Input too long for the selected model",
+              response.status
+            );
+          }
+          return this.createError("ERR_PARSE" /* PARSE_ERROR */, errorMessage, response.status);
+        }
+        case 500:
+        case 502:
+        case 503:
+        case 504:
+          return this.createError(
+            "ERR_SERVER" /* SERVER_ERROR */,
+            "Anthropic server error. Please try again.",
+            response.status
+          );
+        default:
+          return this.createError("ERR_NETWORK" /* NETWORK_ERROR */, errorMessage, response.status);
+      }
+    }
+    /**
+     * Create normalized error
+     */
+    createError(code, message, status, retryAfter) {
+      const error = new Error(message);
+      error.code = code;
+      if (status !== void 0) {
+        error.status = status;
+      }
+      if (retryAfter !== void 0) {
+        error.retryAfter = retryAfter;
+      }
+      return error;
+    }
+    /**
+     * Get user-friendly error messages
+     */
+    getErrorMessage(code) {
+      switch (code) {
+        case "ERR_NO_KEY" /* NO_KEY */:
+          return "Please set your Anthropic API key in settings";
+        case "ERR_KEY_INVALID" /* KEY_INVALID */:
+          return "Invalid API key. Please check your Anthropic key in settings";
+        case "ERR_MODEL_UNAVAILABLE" /* MODEL_UNAVAILABLE */:
+          return "Selected model isn't available for your account. Choose a different model in Settings.";
+        case "ERR_RATE_LIMIT" /* RATE_LIMIT */:
+          return "Rate limit exceeded. Please wait a moment and try again";
+        case "ERR_SERVER" /* SERVER_ERROR */:
+          return "Anthropic server error. Please try again in a moment";
+        case "ERR_UNSUPPORTED_FORMAT" /* UNSUPPORTED_FORMAT */:
+          return "Feature not supported with Anthropic API";
+        case "ERR_PARSE" /* PARSE_ERROR */:
+          return "Error processing response. Please try again";
+        case "ERR_NETWORK" /* NETWORK_ERROR */:
+          return "Network error. Please check your connection and try again";
+        default:
+          return "Unknown error occurred";
+      }
+    }
+    /**
+     * Get usage info (placeholder for future implementation)
+     */
+    async getUsageInfo() {
+      return {
+        totalTokens: 0,
+        estimatedCost: 0
+      };
+    }
+  };
+  var globalOpenAIService2 = null;
+  function getOpenAIService2() {
+    if (!globalOpenAIService2) {
+      globalOpenAIService2 = new OpenAIService2();
+    }
+    return globalOpenAIService2;
+  }
+
+  // src/workers/claude-batch-scorer.ts
+  var MAX_TOKENS_PER_BATCH = 6e3;
+  var MIN_BATCH_SIZE = 10;
+  var MAX_BATCH_SIZE = 30;
+  var TOKENS_PER_CHAR = 0.25;
+  var ClaudeBatchScorer = class {
+    /**
+     * Score bullets using Claude in batches
+     */
+    async scoreBullets(jobAnalysis, bullets, onProgress) {
+      const anthropicService = getOpenAIService2();
+      if (!anthropicService.hasApiKey()) {
+        throw new Error("Anthropic API key required for Claude scoring");
+      }
+      const batches = this.createBatches(jobAnalysis, bullets);
+      if (batches.length === 0) {
+        throw new Error("No batches created - insufficient bullet data");
+      }
+      const allScored = [];
+      for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i];
+        if (!batch) {
+          console.warn(`Batch ${i} is undefined, skipping`);
+          continue;
+        }
+        const progress = 0.4 + i / batches.length * 0.4;
+        onProgress?.(`Claude scoring (batch ${i + 1}/${batches.length})...`, progress);
+        try {
+          const scored = await this.scoreBatch(batch, anthropicService);
+          allScored.push(...scored);
+        } catch (error) {
+          console.warn(`Batch ${i + 1} failed, retrying:`, error);
+          await this.sleep(1e3);
+          try {
+            const scored = await this.scoreBatch(batch, anthropicService, true);
+            allScored.push(...scored);
+          } catch (retryError) {
+            console.error(`Batch ${i + 1} failed after retry:`, retryError);
+            throw new Error(`Batch scoring failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+          }
+        }
+      }
+      return this.normalizeScores(allScored, jobAnalysis.extractedSkills);
+    }
+    /**
+     * Create batches with dynamic sizing
+     */
+    createBatches(jobAnalysis, bullets) {
+      const baseTokens = this.estimateBaseTokens(jobAnalysis);
+      const batches = [];
+      let currentBatch = [];
+      let currentTokens = baseTokens;
+      for (const bullet of bullets) {
+        const bulletTokens = bullet.text.length * TOKENS_PER_CHAR + 50;
+        if (currentBatch.length >= MIN_BATCH_SIZE && (currentTokens + bulletTokens > MAX_TOKENS_PER_BATCH || currentBatch.length >= MAX_BATCH_SIZE)) {
+          batches.push(this.createBatchRequest(jobAnalysis, currentBatch));
+          currentBatch = [bullet];
+          currentTokens = baseTokens + bulletTokens;
+        } else {
+          currentBatch.push(bullet);
+          currentTokens += bulletTokens;
+        }
+      }
+      if (currentBatch.length > 0) {
+        batches.push(this.createBatchRequest(jobAnalysis, currentBatch));
+      }
+      return batches;
+    }
+    /**
+     * Score a single batch
+     */
+    async scoreBatch(batch, anthropicService, isRetry = false) {
+      const systemMessage = `You are a strict JSON API. Output ONLY JSON, no prose, no markdown, no comments.
+Return one result for every input bullet, preserving IDs exactly. Do not rewrite text.
+All scores must be numbers with one decimal place in the range 1.0\u201310.0.
+"skill_hits" must contain only values from the provided SKILLS list.${isRetry ? "\nYou omitted items in the previous response; return all N with IDs." : ""}`;
+      const userMessage = `Rate each resume bullet's relevance to this job.
+
+JOB: ${batch.jobTitle}
+DESCRIPTION: ${batch.jobDescription.substring(0, 2e3)}
+
+SKILLS: ${JSON.stringify(batch.skills)}
+BULLETS: ${JSON.stringify(batch.bullets)}
+
+Return JSON: {"count_in": <number>, "count_out": <number>, "scores": [{"id": "<id>", "score": <1.0-10.0>, "reasons": "<12 words max>", "skill_hits": ["<skills>"], "flags": ["none"]}]}`;
+      const response = await anthropicService.createChatCompletion({
+        model: "claude-3-haiku-20240307",
+        messages: [
+          { role: "system", content: systemMessage },
+          { role: "user", content: userMessage }
+        ],
+        temperature: 0,
+        max_tokens: 2e3
+      });
+      const content = response.choices[0]?.message?.content;
+      if (!content) {
+        throw new Error("No response from Claude");
+      }
+      const parsed = this.parseResponse(content, batch.bullets);
+      return this.convertToScoredBullets(parsed, batch.bullets);
+    }
+    /**
+     * Parse and validate Claude response
+     */
+    parseResponse(content, inputBullets) {
+      let parsed;
+      try {
+        parsed = JSON.parse(content);
+      } catch (e) {
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) throw new Error("No JSON in response");
+        parsed = JSON.parse(jsonMatch[0]);
+      }
+      if (!parsed.scores || !Array.isArray(parsed.scores)) {
+        throw new Error("Invalid response structure");
+      }
+      if (parsed.scores.length !== inputBullets.length) {
+        throw new Error(`Expected ${inputBullets.length} scores, got ${parsed.scores.length}`);
+      }
+      return parsed;
+    }
+    /**
+     * Convert parsed response to ScoredBullet format
+     */
+    convertToScoredBullets(parsed, inputBullets) {
+      return inputBullets.map((bullet) => {
+        const result = parsed.scores.find((s) => s.id === bullet.id);
+        if (!result) {
+          throw new Error(`Missing score for bullet ${bullet.id}`);
+        }
+        return {
+          bulletId: bullet.id,
+          text: bullet.text,
+          projectId: "",
+          roleId: "",
+          score: Math.max(1, Math.min(10, result.score)),
+          normalizedScore: 0,
+          reasons: (result.reasons || "").substring(0, 60),
+          skillHits: Array.isArray(result.skill_hits) ? result.skill_hits : [],
+          flags: Array.isArray(result.flags) ? result.flags : ["none"]
+        };
+      });
+    }
+    /**
+     * Normalize scores and add coverage bonuses
+     */
+    normalizeScores(bullets, jobSkills) {
+      if (bullets.length === 0) return bullets;
+      const scores = bullets.map((b) => b.score);
+      const minScore = Math.min(...scores);
+      const maxScore = Math.max(...scores);
+      const scoreRange = maxScore - minScore || 1;
+      const skillsCovered = /* @__PURE__ */ new Set();
+      return bullets.map((bullet) => {
+        const normalizedScore = (bullet.score - minScore) / scoreRange;
+        const newSkills = bullet.skillHits.filter((skill) => !skillsCovered.has(skill));
+        const coverageBonus = Math.min(newSkills.length * 0.02, 0.2);
+        newSkills.forEach((skill) => skillsCovered.add(skill));
+        const finalScore = 0.85 * normalizedScore + 0.15 * 0.5 + coverageBonus;
+        return {
+          ...bullet,
+          normalizedScore: finalScore
+        };
+      });
+    }
+    createBatchRequest(jobAnalysis, bullets) {
+      return {
+        jobTitle: jobAnalysis.title,
+        jobDescription: jobAnalysis.description,
+        skills: jobAnalysis.extractedSkills,
+        bullets: bullets.map((b) => ({ id: b.bulletId, text: b.text }))
+      };
+    }
+    estimateBaseTokens(jobAnalysis) {
+      const basePrompt = 1e3;
+      const jobTokens = (jobAnalysis.title.length + jobAnalysis.description.length) * TOKENS_PER_CHAR;
+      const skillsTokens = jobAnalysis.extractedSkills.join("").length * TOKENS_PER_CHAR;
+      return basePrompt + jobTokens + skillsTokens;
+    }
+    sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+  };
+
+  // src/utils/text-similarity.ts
+  function calculateWordOverlapSimilarity(text1, text2) {
+    const words1 = new Set(normalizeWords(text1));
+    const words2 = new Set(normalizeWords(text2));
+    const intersection = new Set([...words1].filter((word) => words2.has(word)));
+    const union = /* @__PURE__ */ new Set([...words1, ...words2]);
+    return union.size > 0 ? intersection.size / union.size : 0;
+  }
+  function createFingerprint(text) {
+    return text.toLowerCase().replace(/[^\w\s]/g, "").replace(/\d+/g, "<NUM>").replace(/\s+/g, " ").trim();
+  }
+  function areDuplicates(text1, text2) {
+    if (createFingerprint(text1) === createFingerprint(text2)) {
+      return true;
+    }
+    const wordSim = calculateWordOverlapSimilarity(text1, text2);
+    return wordSim > 0.8;
+  }
+  function normalizeWords(text) {
+    return text.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter((word) => word.length > 2).filter((word) => !isStopWord(word));
+  }
+  function isStopWord(word) {
+    const stopWords = /* @__PURE__ */ new Set([
+      "the",
+      "and",
+      "or",
+      "but",
+      "in",
+      "on",
+      "at",
+      "to",
+      "for",
+      "of",
+      "with",
+      "by",
+      "from",
+      "up",
+      "about",
+      "into",
+      "through",
+      "during",
+      "before",
+      "after",
+      "above",
+      "below",
+      "was",
+      "were",
+      "been",
+      "have",
+      "has",
+      "had",
+      "do",
+      "does",
+      "did",
+      "will",
+      "would",
+      "could",
+      "should",
+      "may",
+      "might",
+      "must",
+      "can",
+      "shall",
+      "this",
+      "that",
+      "these",
+      "those"
+    ]);
+    return stopWords.has(word);
+  }
+
+  // src/workers/bullet-selector.ts
+  var BulletSelector = class {
+    /**
+     * Apply business rules and select final bullets
+     */
+    selectFinalBullets(bullets, roles) {
+      bullets.sort((a, b) => b.normalizedScore - a.normalizedScore);
+      const selected = [];
+      const usedProjects = /* @__PURE__ */ new Set();
+      const roleUsage = /* @__PURE__ */ new Map();
+      for (const role of roles) {
+        roleUsage.set(role.id, 0);
+      }
+      for (const bullet of bullets) {
+        const role = roles.find((r) => r.id === bullet.roleId);
+        const roleLimit = role?.bulletsLimit || 3;
+        const currentUsage = roleUsage.get(bullet.roleId) || 0;
+        if (currentUsage >= roleLimit) continue;
+        if (usedProjects.has(bullet.projectId)) continue;
+        if (this.isRedundant(bullet, selected)) continue;
+        if (this.hasDuplicateFingerprint(bullet, selected)) continue;
+        selected.push(bullet);
+        usedProjects.add(bullet.projectId);
+        roleUsage.set(bullet.roleId, currentUsage + 1);
+      }
+      return this.sortDeterministically(selected);
+    }
+    /**
+     * Check if bullet is redundant with selected bullets
+     */
+    isRedundant(bullet, selected) {
+      for (const existing of selected) {
+        if (calculateWordOverlapSimilarity(bullet.text, existing.text) > 0.75) {
+          return true;
+        }
+      }
+      return false;
+    }
+    /**
+     * Check for duplicate normalized fingerprints
+     */
+    hasDuplicateFingerprint(bullet, selected) {
+      const fingerprint = createFingerprint(bullet.text);
+      for (const existing of selected) {
+        if (createFingerprint(existing.text) === fingerprint) {
+          return true;
+        }
+      }
+      return false;
+    }
+    /**
+     * Alternative: Use the comprehensive duplicate check
+     */
+    isDuplicate(bullet, selected) {
+      for (const existing of selected) {
+        if (areDuplicates(bullet.text, existing.text)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    /**
+     * Apply deterministic sorting for stable results
+     */
+    sortDeterministically(bullets) {
+      return bullets.sort((a, b) => {
+        if (Math.abs(a.normalizedScore - b.normalizedScore) > 1e-3) {
+          return b.normalizedScore - a.normalizedScore;
+        }
+        const aQuantified = this.hasNumbers(a.text) ? 1 : 0;
+        const bQuantified = this.hasNumbers(b.text) ? 1 : 0;
+        if (aQuantified !== bQuantified) {
+          return bQuantified - aQuantified;
+        }
+        return a.bulletId.localeCompare(b.bulletId);
+      });
+    }
+    hasNumbers(text) {
+      return /\d/.test(text);
+    }
+  };
+
+  // src/utils/bm25-filter.ts
+  var BM25_K1 = 1.5;
+  var BM25_B = 0.75;
+  function prefilterWithBM25(jobAnalysis, bullets, limit) {
+    if (bullets.length === 0) return [];
+    const searchTerms = extractSearchTerms(jobAnalysis);
+    const scored = bullets.map((bullet) => ({
+      bullet,
+      score: calculateBM25Score(bullet.text, searchTerms, bullets)
+    }));
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, limit).map((item) => item.bullet);
+  }
+  function extractSearchTerms(jobAnalysis) {
+    const terms = /* @__PURE__ */ new Set();
+    jobAnalysis.title.toLowerCase().split(/\s+/).forEach((word) => {
+      if (word.length > 2) terms.add(word);
+    });
+    jobAnalysis.extractedSkills.forEach((skill) => {
+      const variants = generateSkillVariants(skill);
+      variants.forEach((variant) => terms.add(variant.toLowerCase()));
+    });
+    jobAnalysis.keyRequirements.forEach((req) => {
+      req.toLowerCase().split(/\s+/).forEach((word) => {
+        if (word.length > 3) terms.add(word);
+      });
+    });
+    return Array.from(terms);
+  }
+  function generateSkillVariants(skill) {
+    const variants = [skill];
+    const lower = skill.toLowerCase();
+    variants.push(lower);
+    variants.push(lower.replace(/\s+/g, ""));
+    variants.push(lower.replace(/[^a-z0-9]/g, ""));
+    const words = lower.split(/\s+/);
+    if (words.length > 1) {
+      const acronym = words.map((w) => w[0]).join("");
+      if (acronym.length > 1) variants.push(acronym);
+    }
+    const expansions = {
+      "sql": ["database", "queries"],
+      "js": ["javascript"],
+      "ai": ["artificial intelligence", "machine learning"],
+      "ml": ["machine learning"],
+      "pm": ["product management", "project management"]
+    };
+    if (expansions[lower]) {
+      variants.push(...expansions[lower]);
+    }
+    return variants;
+  }
+  function calculateBM25Score(bulletText, searchTerms, allBullets) {
+    const doc = bulletText.toLowerCase();
+    const docWords = doc.split(/\s+/);
+    const docLength = docWords.length;
+    const avgDocLength = allBullets.reduce((sum, bullet) => {
+      return sum + bullet.text.split(/\s+/).length;
+    }, 0) / allBullets.length;
+    let score = 0;
+    for (const term of searchTerms) {
+      const tf = docWords.filter((word) => word.includes(term)).length;
+      if (tf === 0) continue;
+      const df = allBullets.filter(
+        (bullet) => bullet.text.toLowerCase().includes(term)
+      ).length;
+      const idf = Math.log((allBullets.length - df + 0.5) / (df + 0.5));
+      const tfComponent = tf * (BM25_K1 + 1) / (tf + BM25_K1 * (1 - BM25_B + BM25_B * (docLength / avgDocLength)));
+      score += idf * tfComponent;
+    }
+    score += calculateQualityBonus(bulletText);
+    return score;
+  }
+  function calculateQualityBonus(text) {
+    let bonus = 0;
+    if (/\d+[%$]|\d+\s*(percent|million|billion|thousand)|\$\d+|\d+x/i.test(text)) {
+      bonus += 0.3;
+    }
+    if (/^(led|managed|developed|created|implemented|optimized|increased|reduced|built|designed)/i.test(text)) {
+      bonus += 0.2;
+    }
+    const wordCount = text.split(/\s+/).length;
+    if (wordCount >= 10 && wordCount <= 30) {
+      bonus += 0.1;
+    }
+    return bonus;
+  }
+
+  // src/workers/claude-ranking-engine.ts
+  var ClaudeRankingEngine = class {
+    batchScorer;
+    bulletSelector;
+    config;
+    constructor(config = {}) {
+      this.config = {
+        maxBulletsPerRole: 60,
+        maxTotalBullets: 240,
+        fallbackToBM25: true,
+        ...config
+      };
+      this.batchScorer = new ClaudeBatchScorer();
+      this.bulletSelector = new BulletSelector();
+    }
+    /**
+     * Main ranking pipeline
+     */
+    async rankBullets(jobTitle, jobDescription, bullets, roles, onProgress) {
+      try {
+        onProgress?.("Analyzing job description...", 0.1);
+        const jobAnalyzer = getJobAnalyzer();
+        const jobAnalysis = await jobAnalyzer.analyzeJob(jobTitle, jobDescription);
+        onProgress?.("Filtering bullet points...", 0.2);
+        const prefiltered = this.prefilterBullets(jobAnalysis, bullets, roles);
+        if (prefiltered.length === 0) {
+          throw new Error("No relevant bullet points found for this job description");
+        }
+        let scored;
+        try {
+          onProgress?.("Preparing Claude scoring...", 0.3);
+          scored = await this.batchScorer.scoreBullets(jobAnalysis, prefiltered, onProgress);
+        } catch (error) {
+          console.warn("Claude scoring failed:", error);
+          if (this.config.fallbackToBM25) {
+            onProgress?.("Using fallback ranking...", 0.7);
+            scored = this.createFallbackScores(prefiltered, jobAnalysis.extractedSkills);
+          } else {
+            throw error;
+          }
+        }
+        onProgress?.("Selecting optimal set...", 0.9);
+        return this.bulletSelector.selectFinalBullets(scored, roles);
+      } catch (error) {
+        throw new Error(`Ranking failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+      }
+    }
+    /**
+     * Prefilter bullets using BM25
+     */
+    prefilterBullets(jobAnalysis, bullets, roles) {
+      const bulletsByRole = /* @__PURE__ */ new Map();
+      for (const bullet of bullets) {
+        if (!bulletsByRole.has(bullet.roleId)) {
+          bulletsByRole.set(bullet.roleId, []);
+        }
+        bulletsByRole.get(bullet.roleId).push(bullet);
+      }
+      const prefiltered = [];
+      let totalProcessed = 0;
+      for (const [roleId, roleBullets] of bulletsByRole) {
+        if (totalProcessed >= this.config.maxTotalBullets) break;
+        const roleLimit = Math.min(
+          this.config.maxBulletsPerRole,
+          this.config.maxTotalBullets - totalProcessed
+        );
+        const filtered = prefilterWithBM25(jobAnalysis, roleBullets, roleLimit);
+        for (const bullet of filtered) {
+          prefiltered.push({
+            bulletId: bullet.id,
+            text: bullet.text,
+            projectId: bullet.projectId,
+            roleId: bullet.roleId,
+            score: 5,
+            normalizedScore: 0.5,
+            reasons: "Prefiltered candidate",
+            skillHits: [],
+            flags: []
+          });
+        }
+        totalProcessed += filtered.length;
+      }
+      return prefiltered;
+    }
+    /**
+     * Create fallback scores when Claude fails
+     */
+    createFallbackScores(bullets, jobSkills) {
+      return bullets.map((bullet) => ({
+        ...bullet,
+        score: 5 + Math.random() * 2,
+        normalizedScore: 0.5 + Math.random() * 0.3,
+        reasons: "Keyword-based match",
+        skillHits: this.findSkillHits(bullet.text, jobSkills),
+        flags: ["fallback"]
+      }));
+    }
+    findSkillHits(text, skills) {
+      const hits = [];
+      const lowerText = text.toLowerCase();
+      for (const skill of skills) {
+        if (lowerText.includes(skill.toLowerCase())) {
+          hits.push(skill);
+        }
+      }
+      return hits.slice(0, 5);
+    }
+  };
+
+  // src/workers/recommendation-engine.ts
+  var RecommendationEngine = class {
+    claudeEngine;
+    constructor() {
+      this.claudeEngine = new ClaudeRankingEngine();
+    }
+    /**
+     * Generate recommendations for a job application
+     */
+    async generateRecommendations(jobTitle, jobDescription, onProgress) {
+      const startTime = Date.now();
+      if (!jobTitle.trim() || !jobDescription.trim()) {
+        throw new Error("Job title and description are required");
+      }
+      await this.validateUserHasExperience();
+      try {
+        onProgress?.("Loading experience data...", 0.05);
+        const experienceData = await this.loadExperienceData();
+        onProgress?.("Starting AI analysis...", 0.1);
+        const scoredBullets = await this.claudeEngine.rankBullets(
+          jobTitle,
+          jobDescription,
+          experienceData.bullets,
+          experienceData.roles,
+          onProgress
+        );
+        onProgress?.("Organizing results...", 0.95);
+        const roleResults = this.convertToRoleResults(scoredBullets, experienceData);
+        const processingTime = (Date.now() - startTime) / 1e3;
+        return {
+          jobTitle: jobTitle.trim(),
+          totalBullets: scoredBullets.length,
+          processingTime,
+          roleResults
+        };
+      } catch (error) {
+        throw new Error(`Recommendation generation failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+      }
+    }
+    /**
+     * Validate user has experience data
+     */
+    async validateUserHasExperience() {
+      const [roles, bullets] = await Promise.all([
+        getAll("roles"),
+        getAll("bullets")
+      ]);
+      if (roles.length === 0) {
+        throw new Error("You must add roles first. Please add your work experience in the Experience tab.");
+      }
+      if (bullets.length === 0) {
+        throw new Error("You must add bullet points first. Please add bullet points for your roles in the Experience tab.");
+      }
+    }
+    /**
+     * Load user's experience data
+     */
+    async loadExperienceData() {
+      const [roles, projects, bullets] = await Promise.all([
+        getAll("roles"),
+        getAll("projects"),
+        getAll("bullets")
+      ]);
+      return { roles, projects, bullets };
+    }
+    /**
+     * Convert scored bullets to role-based results format
+     */
+    convertToRoleResults(scoredBullets, experienceData) {
+      const roleResults = [];
+      const bulletsByRole = /* @__PURE__ */ new Map();
+      for (const scoredBullet of scoredBullets) {
+        if (!bulletsByRole.has(scoredBullet.roleId)) {
+          bulletsByRole.set(scoredBullet.roleId, []);
+        }
+        bulletsByRole.get(scoredBullet.roleId).push(scoredBullet);
+      }
+      for (const [roleId, bullets] of bulletsByRole) {
+        const role = experienceData.roles.find((r) => r.id === roleId);
+        if (!role) continue;
+        const selectedBullets = bullets.map((scoredBullet) => {
+          const project = experienceData.projects.find((p) => p.id === scoredBullet.projectId);
+          return {
+            bulletId: scoredBullet.bulletId,
+            text: scoredBullet.text,
+            relevanceScore: scoredBullet.normalizedScore,
+            projectName: project?.name || "Unknown Project",
+            matchedSkills: scoredBullet.skillHits || []
+          };
+        });
+        const avgRelevance = selectedBullets.length > 0 ? selectedBullets.reduce((sum, b) => sum + b.relevanceScore, 0) / selectedBullets.length : 0;
+        const projectsUsed = [...new Set(selectedBullets.map((b) => b.projectName))];
+        roleResults.push({
+          roleId: role.id,
+          roleTitle: `${role.title} (${role.company})`,
+          selectedBullets,
+          projectsUsed,
+          avgRelevance
+        });
+      }
+      roleResults.sort((a, b) => {
+        const roleA = experienceData.roles.find((r) => r.id === a.roleId);
+        const roleB = experienceData.roles.find((r) => r.id === b.roleId);
+        return (roleA?.orderIndex || 0) - (roleB?.orderIndex || 0);
+      });
+      return roleResults;
+    }
+  };
+
+  // src/ui/application-tab.ts
+  var RecommendationService = class {
+    engine;
+    constructor() {
+      this.engine = new RecommendationEngine();
+    }
+    async generateRecommendations(jobTitle, jobDescription) {
+      return await this.engine.generateRecommendations(jobTitle, jobDescription);
+    }
+  };
+  var recommendationService = null;
+  function getRecommendationService() {
+    if (!recommendationService) {
+      recommendationService = new RecommendationService();
+    }
+    return recommendationService;
+  }
   var ApplicationTab = class {
     container;
     processingState = "idle";
     lastResults = null;
     lastError = null;
     lastJobData = null;
-    constructor(container) {
+    onStatusUpdate;
+    constructor(container, onStatusUpdate) {
       this.container = container;
+      this.onStatusUpdate = onStatusUpdate;
     }
     // ============================================================================
     // Public Interface
@@ -2142,19 +3525,112 @@ ${role.company}` : "Unknown Role"
       const submitButton = document.createElement("button");
       submitButton.type = "submit";
       submitButton.className = "form-submit";
-      submitButton.disabled = this.processingState === "processing";
-      setSafeTextContent(
-        submitButton,
-        this.processingState === "processing" ? "Generating..." : "Generate Recommendations"
-      );
+      submitButton.disabled = this.processingState === "processing" || this.processingState === "almost-done";
+      setSafeTextContent(submitButton, this.getSubmitButtonText());
       form.appendChild(titleGroup);
       form.appendChild(descriptionGroup);
       form.appendChild(submitButton);
       form.addEventListener("submit", (event) => {
         event.preventDefault();
-        this.handleFormSubmission(form);
+        if (event.target && this.isHTMLFormElement(event.target)) {
+          this.handleFormSubmission(event.target);
+        }
       });
       return form;
+    }
+    /**
+     * Type guard for HTMLFormElement
+     */
+    isHTMLFormElement(element) {
+      return element instanceof HTMLFormElement;
+    }
+    /**
+     * Get submit button text based on processing state
+     */
+    getSubmitButtonText() {
+      switch (this.processingState) {
+        case "processing":
+          return "Processing...";
+        case "almost-done":
+          return "Almost done...";
+        default:
+          return "Generate Recommendations";
+      }
+    }
+    /**
+     * Handle form submission
+     */
+    async handleFormSubmission(form) {
+      const formData = new FormData(form);
+      const jobTitle = formData.get("job-title")?.trim() || "";
+      const jobDescription = formData.get("job-description")?.trim() || "";
+      if (!jobTitle) {
+        this.showInlineError("Please enter a job title");
+        return;
+      }
+      if (!jobDescription || jobDescription.length < 10) {
+        this.showInlineError("Please enter a job description (at least 10 characters)");
+        return;
+      }
+      this.lastError = null;
+      this.lastJobData = { title: jobTitle, description: jobDescription };
+      try {
+        this.updateProcessingState("processing");
+        this.render();
+        const service = getRecommendationService();
+        setTimeout(() => {
+          if (this.processingState === "processing") {
+            this.updateProcessingState("almost-done");
+            this.render();
+          }
+        }, 1500);
+        const result = await service.generateRecommendations(jobTitle, jobDescription);
+        this.lastResults = {
+          jobTitle: result.jobTitle,
+          totalBullets: result.totalBullets,
+          processingTime: result.processingTime,
+          projectsConsidered: result.roleResults.length,
+          // Approximation for now
+          roleResults: result.roleResults.map((role) => ({
+            roleTitle: role.roleTitle,
+            projectsShortlisted: [],
+            // Will be populated in future iterations
+            selectedBullets: role.selectedBullets.map((bullet) => ({
+              text: bullet.text,
+              relevance: bullet.relevanceScore ?? 0.9,
+              projectName: bullet.projectName ?? "Unknown Project"
+            })),
+            avgRelevance: role.selectedBullets.reduce((avg, b) => avg + (b.relevanceScore ?? 0.9), 0) / role.selectedBullets.length
+          }))
+        };
+        this.updateProcessingState("complete");
+        if (this.onStatusUpdate) {
+          this.onStatusUpdate({ success: `Generated ${result.totalBullets} recommendations in ${result.processingTime.toFixed(1)}s` });
+        }
+      } catch (error) {
+        this.lastError = error instanceof Error ? error.message : "Unknown error occurred";
+        this.updateProcessingState("error");
+        if (this.lastError.includes("API key") || this.lastError.includes("network") || this.lastError.includes("OpenAI")) {
+          if (this.onStatusUpdate) {
+            this.onStatusUpdate({ error: this.lastError });
+          }
+        }
+      }
+      this.render();
+    }
+    /**
+     * Update processing state
+     */
+    updateProcessingState(state) {
+      this.processingState = state;
+    }
+    /**
+     * Show inline error message
+     */
+    showInlineError(message) {
+      this.lastError = message;
+      this.processingState = "error";
+      this.render();
     }
     /**
      * Create input group
@@ -2166,8 +3642,14 @@ ${role.company}` : "Unknown Role"
       const input = document.createElement("input");
       input.type = type;
       input.id = id;
+      input.name = id;
       input.className = "form-input";
       input.placeholder = placeholder;
+      if (this.lastJobData) {
+        if (id === "job-title") {
+          input.value = this.lastJobData.title;
+        }
+      }
       group.appendChild(labelElement);
       group.appendChild(input);
       return group;
@@ -2181,9 +3663,13 @@ ${role.company}` : "Unknown Role"
       labelElement.setAttribute("for", id);
       const textarea = document.createElement("textarea");
       textarea.id = id;
+      textarea.name = id;
       textarea.className = "form-textarea";
       textarea.placeholder = placeholder;
       textarea.rows = 8;
+      if (this.lastJobData && id === "job-description") {
+        textarea.value = this.lastJobData.description;
+      }
       group.appendChild(labelElement);
       group.appendChild(textarea);
       return group;
@@ -2198,7 +3684,7 @@ ${role.company}` : "Unknown Role"
       const section = createSafeElement("section", "", "results-section");
       const title = createSafeElement("h3", "Recommendations", "results-title");
       section.appendChild(title);
-      if (this.processingState === "processing") {
+      if (this.processingState === "processing" || this.processingState === "almost-done") {
         const status = this.createProcessingStatus();
         section.appendChild(status);
       } else if (this.processingState === "complete" && this.lastResults) {
@@ -2220,7 +3706,8 @@ ${role.company}` : "Unknown Role"
     createProcessingStatus() {
       const container = createSafeElement("div", "", "processing-status");
       const spinner = createSafeElement("div", "", "spinner");
-      const status = createSafeElement("p", "Analyzing job description and finding best matches...", "status-text");
+      const statusText = this.processingState === "processing" ? "Analyzing job description and finding best matches..." : "Finalizing recommendations...";
+      const status = createSafeElement("p", statusText, "status-text");
       container.appendChild(spinner);
       container.appendChild(status);
       return container;
@@ -2235,7 +3722,7 @@ ${role.company}` : "Unknown Role"
       const summaryText = createSafeElement("p", "", "summary-text");
       setSafeTextContent(
         summaryText,
-        `Selected ${totalBullets} bullet points across ${projectsConsidered} projects. Processing time: ${processingTime}s`
+        `Selected ${totalBullets} bullet points across ${projectsConsidered} projects. Processing time: ${processingTime.toFixed(1)}s`
       );
       summary.appendChild(summaryText);
       return summary;
@@ -2246,59 +3733,54 @@ ${role.company}` : "Unknown Role"
     createResultsDetails() {
       if (!this.lastResults) return createSafeElement("div", "", "results-details");
       const details = createSafeElement("div", "", "results-details");
-      this.lastResults.roleResults.forEach((roleResult) => {
+      for (const roleResult of this.lastResults.roleResults) {
         const roleSection = this.createRoleResultSection(roleResult);
         details.appendChild(roleSection);
-      });
+      }
       return details;
     }
     /**
-     * Create individual role result section
+     * Create role result section
      */
     createRoleResultSection(roleResult) {
-      const section = createSafeElement("div", "", "role-result-section");
-      const header = createSafeElement("div", "", "role-header");
-      const title = createSafeElement("h4", "", "role-title");
-      setSafeTextContent(title, `${roleResult.roleTitle} - ${roleResult.selectedBullets.length} bullet points selected`);
-      const projectsInfo = createSafeElement("p", "", "projects-info");
-      setSafeTextContent(projectsInfo, `Projects considered: ${roleResult.projectsShortlisted.join(", ")}`);
-      header.appendChild(title);
-      header.appendChild(projectsInfo);
+      const section = createSafeElement("div", "", "role-result");
+      const header = createSafeElement("h4", "", "role-title");
+      setSafeTextContent(
+        header,
+        `${roleResult.roleTitle} - ${roleResult.selectedBullets.length} bullet points selected`
+      );
       const bulletsList = createSafeElement("ul", "", "bullets-list");
-      const sortedBullets = [...roleResult.selectedBullets].sort((a, b) => b.relevance - a.relevance);
-      sortedBullets.forEach((bullet) => {
+      for (const bullet of roleResult.selectedBullets) {
         const listItem = createSafeElement("li", "", "bullet-item");
         const bulletText = createSafeElement("span", bullet.text, "bullet-text");
         const metadata = createSafeElement("span", "", "bullet-metadata");
-        setSafeTextContent(metadata, `(Relevance: ${Math.round(bullet.relevance * 100)}%, Project: ${bullet.projectName})`);
+        setSafeTextContent(
+          metadata,
+          ` (Relevance: ${(bullet.relevance * 100).toFixed(0)}%, Project: ${bullet.projectName})`
+        );
         listItem.appendChild(bulletText);
         listItem.appendChild(metadata);
         bulletsList.appendChild(listItem);
-      });
+      }
       section.appendChild(header);
       section.appendChild(bulletsList);
       return section;
     }
     /**
-     * Create results actions section
+     * Create results actions (copy, export, etc.)
      */
     createResultsActions() {
       const actions = createSafeElement("div", "", "results-actions");
       const copyButton = document.createElement("button");
-      copyButton.className = "action-button action-button--primary";
+      copyButton.className = "form-button form-button--primary";
       setSafeTextContent(copyButton, "Copy All Bullets");
-      copyButton.addEventListener("click", () => this.copyResultsToClipboard());
-      const exportButton = document.createElement("button");
-      exportButton.className = "action-button action-button--secondary";
-      setSafeTextContent(exportButton, "Export to Plain Text");
-      exportButton.addEventListener("click", () => this.exportResultsToText());
-      const refreshButton = document.createElement("button");
-      refreshButton.className = "action-button action-button--tertiary";
-      setSafeTextContent(refreshButton, "Refresh Results");
-      refreshButton.addEventListener("click", () => this.refreshResults());
+      copyButton.addEventListener("click", () => this.copyBulletsToClipboard());
+      const regenerateButton = document.createElement("button");
+      regenerateButton.className = "form-button form-button--secondary";
+      setSafeTextContent(regenerateButton, "Regenerate");
+      regenerateButton.addEventListener("click", () => this.regenerateRecommendations());
       actions.appendChild(copyButton);
-      actions.appendChild(exportButton);
-      actions.appendChild(refreshButton);
+      actions.appendChild(regenerateButton);
       return actions;
     }
     /**
@@ -2306,133 +3788,91 @@ ${role.company}` : "Unknown Role"
      */
     createErrorDisplay() {
       const container = createSafeElement("div", "", "error-display");
-      const title = createSafeElement("h4", "Generation Failed", "error-title");
-      const message = createSafeElement("p", this.lastError || "Unknown error occurred", "error-message");
+      const title = createSafeElement("h4", "Error Generating Recommendations", "error-title");
+      const message = createSafeElement("p", this.lastError || "Unknown error", "error-message");
       const retryButton = document.createElement("button");
-      retryButton.className = "action-button action-button--primary";
+      retryButton.className = "form-button form-button--secondary";
       setSafeTextContent(retryButton, "Try Again");
-      retryButton.addEventListener("click", () => this.retryGeneration());
+      retryButton.addEventListener("click", () => {
+        if (this.lastJobData) {
+          const form = this.container.querySelector('form[data-form="job-input"]');
+          if (form && this.isHTMLFormElement(form)) {
+            this.handleFormSubmission(form);
+          }
+        }
+      });
       container.appendChild(title);
       container.appendChild(message);
       container.appendChild(retryButton);
       return container;
     }
     // ============================================================================
-    // Event Handlers
+    // Actions
     // ============================================================================
     /**
-     * Handle form submission
+     * Copy bullets to clipboard (simple format)
      */
-    async handleFormSubmission(form) {
-      try {
-        const formData = new FormData(form);
-        const jobTitle = formData.get("job-title");
-        const jobDescription = formData.get("job-description");
-        if (!jobDescription?.trim()) {
-          throw new Error("Job description is required");
+    async copyBulletsToClipboard() {
+      if (!this.lastResults) return;
+      const bullets = [];
+      for (const roleResult of this.lastResults.roleResults) {
+        for (const bullet of roleResult.selectedBullets) {
+          bullets.push(`\u2022 ${bullet.text}`);
         }
-        await this.generateRecommendations(jobTitle, jobDescription);
-      } catch (error) {
-        this.processingState = "error";
-        this.lastError = error instanceof Error ? error.message : "Unknown error";
-        this.render();
       }
-    }
-    /**
-     * Generate recommendations (placeholder for now)
-     */
-    async generateRecommendations(jobTitle, jobDescription) {
-      this.processingState = "processing";
-      this.lastError = null;
-      this.lastJobData = { title: jobTitle, description: jobDescription };
-      this.render();
+      const text = bullets.join("\n");
       try {
-        const startTime = Date.now();
-        await new Promise((resolve) => setTimeout(resolve, 2e3));
-        const result = await this.simulateRecommendationGeneration(jobTitle, jobDescription);
-        const processingTime = (Date.now() - startTime) / 1e3;
-        result.processingTime = processingTime;
-        this.lastResults = result;
-        this.processingState = "complete";
-        this.render();
+        await navigator.clipboard.writeText(text);
+        if (this.onStatusUpdate) {
+          this.onStatusUpdate({ success: `Copied ${bullets.length} bullet points to clipboard` });
+        }
       } catch (error) {
-        this.processingState = "error";
-        this.lastError = error instanceof Error ? error.message : "Unknown error";
-        this.render();
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textArea);
+        if (this.onStatusUpdate) {
+          this.onStatusUpdate({ success: `Copied ${bullets.length} bullet points to clipboard` });
+        }
       }
     }
     /**
-     * Simulate recommendation generation (temporary)
+     * Regenerate recommendations
      */
-    async simulateRecommendationGeneration(jobTitle, jobDescription) {
-      return {
-        jobTitle,
-        totalBullets: 5,
-        processingTime: 2.1,
-        projectsConsidered: 8,
-        roleResults: [
-          {
-            roleTitle: "Senior Consultant",
-            projectsShortlisted: ["Global Telecom", "Healthcare M&A", "Retail Strategy"],
-            selectedBullets: [
-              {
-                text: "Led cross-functional team of 12 engineers to deliver enterprise software platform, resulting in 40% improvement in deployment efficiency",
-                relevance: 0.94,
-                projectName: "Global Telecom"
-              },
-              {
-                text: "Developed comprehensive market analysis framework, identifying $50M growth opportunity in emerging markets",
-                relevance: 0.89,
-                projectName: "Healthcare M&A"
-              }
-            ],
-            avgRelevance: 0.9
-          }
-        ]
-      };
-    }
-    /**
-     * Copy results to clipboard
-     */
-    async copyResultsToClipboard() {
-      console.log("Copy to clipboard not implemented yet");
-    }
-    /**
-     * Export results to text
-     */
-    exportResultsToText() {
-      console.log("Export to text not implemented yet");
-    }
-    /**
-     * Refresh results
-     */
-    refreshResults() {
+    regenerateRecommendations() {
       if (this.lastJobData) {
-        this.generateRecommendations(this.lastJobData.title, this.lastJobData.description);
+        const form = this.container.querySelector('form[data-form="job-input"]');
+        if (form && this.isHTMLFormElement(form)) {
+          this.handleFormSubmission(form);
+        }
       }
     }
-    /**
-     * Retry generation
-     */
-    retryGeneration() {
-      if (this.lastJobData) {
-        this.generateRecommendations(this.lastJobData.title, this.lastJobData.description);
-      }
-    }
+    // ============================================================================
+    // Keyboard Shortcuts
+    // ============================================================================
     /**
      * Add keyboard shortcuts
      */
     addKeyboardShortcuts() {
-      const handleKeydown = (event) => {
+      const handleKeyPress = (event) => {
         if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
           event.preventDefault();
-          const form = this.container.querySelector(".job-input-form");
-          if (form && this.processingState !== "processing") {
+          const form = this.container.querySelector('form[data-form="job-input"]');
+          if (form && this.isHTMLFormElement(form) && this.processingState === "idle") {
             this.handleFormSubmission(form);
           }
         }
+        if ((event.ctrlKey || event.metaKey) && event.key === "c" && this.lastResults) {
+          const activeElement = document.activeElement;
+          if (!activeElement || activeElement.tagName !== "INPUT" && activeElement.tagName !== "TEXTAREA") {
+            event.preventDefault();
+            this.copyBulletsToClipboard();
+          }
+        }
       };
-      document.addEventListener("keydown", handleKeydown);
+      document.addEventListener("keydown", handleKeyPress);
     }
   };
 
@@ -2441,212 +3881,7 @@ ${role.company}` : "Unknown Role"
 
   // src/ui/api-config.ts
   init_xss_safe_rendering();
-
-  // src/services/openai-service.ts
-  var OPENAI_BASE_URL = "https://api.openai.com/v1";
-  var DEFAULT_MODEL = "text-embedding-3-small";
-  var DEFAULT_DIMENSIONS = 1536;
-  var RATE_LIMIT_CONFIG = {
-    MAX_RETRIES: 3,
-    BASE_DELAY: 1e3,
-    // 1 second
-    MAX_DELAY: 3e4,
-    // 30 seconds
-    JITTER_MAX: 0.1,
-    // 10% jitter
-    CONCURRENT_LIMIT: 3
-    // Max concurrent requests
-  };
-  var OpenAIService = class {
-    apiKey = null;
-    currentRequests = 0;
-    requestQueue = [];
-    /**
-     * Set OpenAI API key (stored in memory only)
-     */
-    setApiKey(key) {
-      this.apiKey = key?.trim() || null;
-    }
-    /**
-     * Get current API key status
-     */
-    hasApiKey() {
-      return this.apiKey !== null && this.apiKey.length > 0;
-    }
-    /**
-     * Clear stored API key
-     */
-    clearApiKey() {
-      this.apiKey = null;
-    }
-    /**
-     * Test API connection
-     */
-    async testConnection() {
-      if (!this.hasApiKey()) {
-        return { success: false, error: "No API key configured" };
-      }
-      try {
-        await this.generateEmbedding("test", { skipCache: true });
-        return { success: true };
-      } catch (error) {
-        return {
-          success: false,
-          error: error instanceof Error ? error.message : "Unknown error"
-        };
-      }
-    }
-    /**
-     * Generate embedding for text with caching and rate limiting
-     */
-    async generateEmbedding(text, options = {}) {
-      if (!this.hasApiKey()) {
-        throw new Error("OpenAI API key not configured");
-      }
-      const { model = DEFAULT_MODEL, dimensions = DEFAULT_DIMENSIONS } = options;
-      if (!text || text.trim().length === 0) {
-        throw new Error("Text cannot be empty");
-      }
-      const cleanText = text.trim().replace(/\s+/g, " ");
-      await this.acquireRateLimit();
-      try {
-        const embedding = await this.makeEmbeddingRequest(cleanText, model, dimensions);
-        return embedding;
-      } finally {
-        this.releaseRateLimit();
-      }
-    }
-    /**
-     * Generate embeddings for multiple texts (batch processing)
-     */
-    async generateEmbeddings(texts, options = {}) {
-      const results = [];
-      const { onProgress } = options;
-      for (let i = 0; i < texts.length; i++) {
-        const embedding = await this.generateEmbedding(texts[i] || "", options);
-        results.push(embedding);
-        if (onProgress) {
-          onProgress(i + 1, texts.length);
-        }
-      }
-      return results;
-    }
-    // ============================================================================
-    // Private Methods
-    // ============================================================================
-    /**
-     * Make the actual API request with retry logic
-     */
-    async makeEmbeddingRequest(text, model, dimensions, retryCount = 0) {
-      try {
-        const response = await fetch(`${OPENAI_BASE_URL}/embeddings`, {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${this.apiKey}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            input: text,
-            model,
-            dimensions
-          })
-        });
-        if (response.status === 429) {
-          const retryAfter = response.headers.get("Retry-After");
-          const delay = retryAfter ? parseInt(retryAfter) * 1e3 : this.calculateBackoffDelay(retryCount);
-          if (retryCount < RATE_LIMIT_CONFIG.MAX_RETRIES) {
-            await this.sleep(delay);
-            return this.makeEmbeddingRequest(text, model, dimensions, retryCount + 1);
-          } else {
-            throw new Error("Rate limit exceeded after maximum retries");
-          }
-        }
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          const errorMessage = errorData.error?.message || `HTTP ${response.status}: ${response.statusText}`;
-          throw new Error(`OpenAI API error: ${errorMessage}`);
-        }
-        const data = await response.json();
-        if (!data.data || !Array.isArray(data.data) || data.data.length === 0) {
-          throw new Error("Invalid embedding response format");
-        }
-        const embeddingData = data.data[0];
-        if (!embeddingData?.embedding || !Array.isArray(embeddingData.embedding)) {
-          throw new Error("Missing embedding data in response");
-        }
-        return new Float32Array(embeddingData.embedding);
-      } catch (error) {
-        if (retryCount < RATE_LIMIT_CONFIG.MAX_RETRIES && this.isRetryableError(error)) {
-          const delay = this.calculateBackoffDelay(retryCount);
-          await this.sleep(delay);
-          return this.makeEmbeddingRequest(text, model, dimensions, retryCount + 1);
-        }
-        throw error;
-      }
-    }
-    /**
-     * Calculate exponential backoff delay with jitter
-     */
-    calculateBackoffDelay(retryCount) {
-      const baseDelay = RATE_LIMIT_CONFIG.BASE_DELAY * Math.pow(2, retryCount);
-      const cappedDelay = Math.min(baseDelay, RATE_LIMIT_CONFIG.MAX_DELAY);
-      const jitter = cappedDelay * RATE_LIMIT_CONFIG.JITTER_MAX * Math.random();
-      return cappedDelay + jitter;
-    }
-    /**
-     * Determine if error is retryable
-     */
-    isRetryableError(error) {
-      if (error instanceof Error) {
-        const message = error.message.toLowerCase();
-        return message.includes("network") || message.includes("timeout") || message.includes("fetch") || message.includes("connection");
-      }
-      return false;
-    }
-    /**
-     * Acquire rate limit slot
-     */
-    async acquireRateLimit() {
-      return new Promise((resolve) => {
-        if (this.currentRequests < RATE_LIMIT_CONFIG.CONCURRENT_LIMIT) {
-          this.currentRequests++;
-          resolve();
-        } else {
-          this.requestQueue.push(() => {
-            this.currentRequests++;
-            resolve();
-          });
-        }
-      });
-    }
-    /**
-     * Release rate limit slot
-     */
-    releaseRateLimit() {
-      this.currentRequests--;
-      if (this.requestQueue.length > 0) {
-        const nextRequest = this.requestQueue.shift();
-        if (nextRequest) {
-          nextRequest();
-        }
-      }
-    }
-    /**
-     * Sleep utility
-     */
-    sleep(ms) {
-      return new Promise((resolve) => setTimeout(resolve, ms));
-    }
-  };
-  var globalOpenAIService = null;
-  function getOpenAIService() {
-    if (!globalOpenAIService) {
-      globalOpenAIService = new OpenAIService();
-    }
-    return globalOpenAIService;
-  }
-
-  // src/ui/api-config.ts
+  init_transactions();
   var APIConfig = class {
     container = null;
     /**
@@ -2655,9 +3890,14 @@ ${role.company}` : "Unknown Role"
     async render(container) {
       this.container = container;
       container.innerHTML = "";
+      try {
+        await initializeOpenAIService();
+      } catch (error) {
+        console.warn("Failed to initialize OpenAI service:", error);
+      }
       const description = createSafeElement(
         "p",
-        "Your OpenAI API key is stored locally in your browser and never exported.",
+        "Your OpenAI API key is stored locally in your browser and never exported. OpenAI works directly from the browser.",
         "section-description"
       );
       const form = this.createForm();
@@ -2676,7 +3916,7 @@ ${role.company}` : "Unknown Role"
       keyInput.type = "password";
       keyInput.id = "api-key";
       keyInput.className = "form-input";
-      keyInput.placeholder = "sk-...";
+      keyInput.placeholder = "sk-proj-...";
       const openaiService = getOpenAIService();
       if (openaiService.hasApiKey()) {
         keyInput.value = "***key-stored***";
@@ -2741,60 +3981,76 @@ ${role.company}` : "Unknown Role"
     // Actions
     // ============================================================================
     /**
-     * Save API key
+     * Save API key - DEBUG VERSION
      */
     async saveKey(key) {
       if (!key || key === "***key-stored***") {
-        alert("Please enter a valid API key");
+        alert("Please enter a valid OpenAI API key");
         return;
       }
       try {
-        const openaiService = getOpenAIService();
-        openaiService.setApiKey(key);
-        const result = await openaiService.testConnection();
-        if (!result.success) {
-          openaiService.clearApiKey();
+        console.log("INPUT KEY:", key);
+        const openaiService = await initializeOpenAIService();
+        await openaiService.setApiKey(key);
+        const storedValue = await getSetting("openai_api_key");
+        console.log("STORED VALUE:", storedValue);
+        console.log("SERVICE HAS KEY:", openaiService.hasApiKey());
+        console.log("SERVICE KEY VALUE:", openaiService.hasApiKey() ? openaiService.getApiKey() : "NO KEY");
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const result = await openaiService.testApiKey();
+        if (!result.isValid) {
+          await openaiService.clearApiKey();
           throw new Error(result.error || "Connection test failed");
         }
-        alert("API key saved and tested successfully");
+        alert("OpenAI API key saved and tested successfully");
         if (this.container) {
           await this.render(this.container);
         }
       } catch (error) {
+        console.error("SAVE KEY ERROR:", error);
         alert(`Failed to save API key: ${error instanceof Error ? error.message : "Unknown error"}`);
       }
     }
     /**
-     * Test connection
+     * Test connection - DEBUG VERSION
      */
     async testConnection() {
-      const openaiService = getOpenAIService();
-      if (!openaiService.hasApiKey()) {
-        alert("No API key configured");
-        return;
-      }
       try {
-        const result = await openaiService.testConnection();
-        if (result.success) {
+        console.log("TESTING CONNECTION...");
+        const openaiService = await initializeOpenAIService();
+        if (!openaiService.hasApiKey()) {
+          console.log("NO API KEY FOUND");
+          alert("No OpenAI API key configured");
+          return;
+        }
+        console.log("SERVICE HAS KEY, TESTING...");
+        const result = await openaiService.testApiKey();
+        console.log("TEST RESULT:", result);
+        if (result.isValid) {
           alert("Connection test successful");
         } else {
           alert(`Connection test failed: ${result.error}`);
         }
       } catch (error) {
+        console.error("TEST CONNECTION ERROR:", error);
         alert(`Connection test failed: ${error instanceof Error ? error.message : "Unknown error"}`);
       }
     }
     /**
      * Forget API key
      */
-    forgetKey() {
-      if (confirm("Are you sure you want to forget your API key? This will disable AI functionality.")) {
-        const openaiService = getOpenAIService();
-        openaiService.clearApiKey();
-        if (this.container) {
-          this.render(this.container);
+    async forgetKey() {
+      if (confirm("Are you sure you want to forget your OpenAI API key? This will disable AI functionality.")) {
+        try {
+          const openaiService = await initializeOpenAIService();
+          await openaiService.clearApiKey();
+          if (this.container) {
+            await this.render(this.container);
+          }
+          alert("OpenAI API key forgotten");
+        } catch (error) {
+          alert(`Failed to forget API key: ${error instanceof Error ? error.message : "Unknown error"}`);
         }
-        alert("API key forgotten");
       }
     }
   };
@@ -3804,18 +5060,6 @@ ${role.company}` : "Unknown Role"
         await this.settingsTab.render();
       } catch (error) {
         this.showError(`Failed to load settings tab: ${error instanceof Error ? error.message : "Unknown error"}`);
-      }
-    }
-    /**
-     * Generate recommendations (placeholder)
-     */
-    async generateRecommendations() {
-      try {
-        this.showLoading("Generating recommendations...");
-        await new Promise((resolve) => setTimeout(resolve, 2e3));
-        this.showSuccess("Recommendations generated successfully");
-      } catch (error) {
-        this.showError(`Failed to generate recommendations: ${error instanceof Error ? error.message : "Unknown error"}`);
       }
     }
     // ============================================================================
