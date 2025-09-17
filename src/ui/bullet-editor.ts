@@ -1,19 +1,17 @@
 /**
- * Bullet editor modal coordinator (50 lines)
+ * Bullet editor modal coordinator
  */
 
 import { BulletFormBuilder } from './bullet-form-builder';
-import { BulletDataService } from './bullet-data-service';
+import { getBulletDataService } from './bullet-data-service';
 import { createSafeElement } from './xss-safe-rendering';
 
 export class BulletEditor {
   private modal: HTMLElement | null = null;
   private formBuilder: BulletFormBuilder;
-  private dataService: BulletDataService;
 
   constructor() {
     this.formBuilder = new BulletFormBuilder();
-    this.dataService = new BulletDataService();
   }
 
   async showAddModal(defaultRoleId?: string, defaultProjectId?: string, onSave?: () => void): Promise<void> {
@@ -26,7 +24,10 @@ export class BulletEditor {
   }
 
   async showEditModal(bulletId: string, onSave?: () => void): Promise<void> {
-    const bullet = await this.dataService.getBullet(bulletId);
+    const dataService = getBulletDataService();
+    const bullets = await dataService.getAllBullets();
+    const bullet = bullets.find(b => b.id === bulletId);
+    
     if (!bullet) throw new Error('Bullet not found');
     
     await this.showModal({
@@ -70,32 +71,39 @@ export class BulletEditor {
     const mainContent = document.querySelector('.main-content') || document.body;
     mainContent.appendChild(this.modal!);
     
-    // Debug: Check if modal is properly added
-    console.log('Modal added to:', mainContent);
-    console.log('Modal in DOM:', document.contains(this.modal!));
-    
-    // Check if inputs are accessible
-    const textInput = this.modal!.querySelector('#bullet-text') as HTMLTextAreaElement;
-    console.log('Text input found:', textInput);
-    console.log('Text input disabled:', textInput.disabled);
-    
-    // Try to focus programmatically
+    // Focus first input
     setTimeout(() => {
-      textInput.focus();
-      console.log('Focused on text input');
+      const firstInput = this.modal!.querySelector('input, textarea') as HTMLInputElement;
+      firstInput?.focus();
     }, 100);
   }
 
   private async handleSubmit(data: any, isEdit: boolean, bulletId?: string, onSave?: () => void): Promise<void> {
     try {
+      const dataService = getBulletDataService();
+      
       if (isEdit && bulletId) {
-        await this.dataService.updateBullet(bulletId, data);
+        await dataService.updateBullet(bulletId, {
+          text: data.text,
+          projectId: data.projectId
+        });
       } else {
-        await this.dataService.createBullet(data);
+        await dataService.createBullet({
+          roleId: data.roleId,
+          projectId: data.projectId,
+          text: data.text,
+          source: 'manual'
+        });
       }
+      
       this.hideModal();
-      onSave?.();
+      
+      if (onSave) {
+        onSave();
+      }
+      
     } catch (error) {
+      console.error('Failed to save bullet:', error);
       alert('Failed to save bullet point');
     }
   }
@@ -103,12 +111,18 @@ export class BulletEditor {
   private hideModal(): void {
     this.modal?.remove();
     this.modal = null;
-    document.onkeydown = null;
   }
 }
 
+// ============================================================================
+// Global Editor Instance
+// ============================================================================
+
 let globalBulletEditor: BulletEditor | null = null;
+
 export function getBulletEditor(): BulletEditor {
-  if (!globalBulletEditor) globalBulletEditor = new BulletEditor();
+  if (!globalBulletEditor) {
+    globalBulletEditor = new BulletEditor();
+  }
   return globalBulletEditor;
 }

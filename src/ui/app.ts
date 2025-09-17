@@ -5,10 +5,11 @@
 
 import { 
     createSafeElement, 
-    setSafeTextContent, 
     createErrorElement,
     createSuccessElement 
   } from './xss-safe-rendering';
+import { ApplicationTab } from './application-tab';
+import { SettingsTab } from './settings-tab';
   
   // ============================================================================
   // Application State Types
@@ -69,6 +70,10 @@ import {
     private tabNavigation: HTMLElement | null = null;
     private tabContent: HTMLElement | null = null;
     private statusBar: HTMLElement | null = null;
+    
+    // Tab instances
+    private applicationTab: ApplicationTab | null = null;
+    private settingsTab: SettingsTab | null = null;
     
     constructor(containerId: string) {
       const container = document.getElementById(containerId);
@@ -159,19 +164,16 @@ import {
       button.setAttribute('data-tab', config.id);
       button.setAttribute('aria-label', config.description);
       
-      // Create button content safely
       const icon = createSafeElement('span', config.icon, 'tab-icon');
       const label = createSafeElement('span', config.label, 'tab-label');
       
       button.appendChild(icon);
       button.appendChild(label);
       
-      // Add click handler
       button.addEventListener('click', () => {
         this.switchTab(config.id);
       });
       
-      // Add keyboard navigation
       button.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
@@ -187,7 +189,7 @@ import {
      * Create tab content container
      */
     private createTabContent(): HTMLElement {
-        return createSafeElement('div', '', 'tab-content');
+      return createSafeElement('div', '', 'tab-content');
     }
     
     /**
@@ -204,17 +206,11 @@ import {
     /**
      * Switch to a different tab
      */
-    async switchTab(tabName: TabName): Promise<void> {
+    private async switchTab(tabName: TabName): Promise<void> {
       try {
-        // Update state
         this.state.currentTab = tabName;
-        
-        // Update navigation visual state
         this.updateTabNavigation();
-        
-        // Load tab content
         await this.loadTabContent(tabName);
-        
       } catch (error) {
         this.showError(`Failed to switch to ${tabName} tab: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
@@ -246,13 +242,13 @@ import {
       // Create tab-specific content
       switch (tabName) {
         case 'application':
-          this.loadApplicationTab();
+          await this.loadApplicationTab();
           break;
         case 'experience':
           this.loadExperienceTab();
           break;
         case 'settings':
-          this.loadSettingsTab();
+          await this.loadSettingsTab();
           break;
         default:
           throw new Error(`Unknown tab: ${tabName}`);
@@ -262,180 +258,91 @@ import {
     /**
      * Load New Application tab content
      */
-    private loadApplicationTab(): void {
+    private async loadApplicationTab(): Promise<void> {
       if (!this.tabContent) return;
       
-      const container = createSafeElement('div', '', 'application-tab');
-      
-      // Create job input section
-      const jobSection = createSafeElement('section', '', 'job-input-section');
-      const jobTitle = createSafeElement('h2', 'Job Application', 'section-title');
-      const jobForm = this.createJobInputForm();
-      
-      jobSection.appendChild(jobTitle);
-      jobSection.appendChild(jobForm);
-      
-      // Create results section (initially hidden)
-      const resultsSection = createSafeElement('section', '', 'results-section hidden');
-      const resultsTitle = createSafeElement('h2', 'Recommendations', 'section-title');
-      const resultsContainer = createSafeElement('div', '', 'results-container');
-      
-      resultsSection.appendChild(resultsTitle);
-      resultsSection.appendChild(resultsContainer);
-      
-      container.appendChild(jobSection);
-      container.appendChild(resultsSection);
-      this.tabContent.appendChild(container);
-    }
-    
-    /**
-     * Create job input form
-     */
-    private createJobInputForm(): HTMLElement {
-      const form = createSafeElement('form', '', 'job-input-form');
-      
-      // Job title input
-      const titleGroup = createSafeElement('div', '', 'form-group');
-      const titleLabel = createSafeElement('label', 'Job Title', 'form-label');
-      titleLabel.setAttribute('for', 'job-title');
-      
-      const titleInput = document.createElement('input');
-      titleInput.type = 'text';
-      titleInput.id = 'job-title';
-      titleInput.className = 'form-input';
-      titleInput.placeholder = 'e.g., Senior Product Manager';
-      
-      titleGroup.appendChild(titleLabel);
-      titleGroup.appendChild(titleInput);
-      
-      // Job description textarea
-      const descGroup = createSafeElement('div', '', 'form-group');
-      const descLabel = createSafeElement('label', 'Job Description', 'form-label');
-      descLabel.setAttribute('for', 'job-description');
-      
-      const descTextarea = document.createElement('textarea');
-      descTextarea.id = 'job-description';
-      descTextarea.className = 'form-textarea';
-      descTextarea.placeholder = 'Paste the job description here...';
-      descTextarea.rows = 8;
-      
-      descGroup.appendChild(descLabel);
-      descGroup.appendChild(descTextarea);
-      
-      // Function bias selection
-      const biasGroup = createSafeElement('div', '', 'form-group');
-      const biasLabel = createSafeElement('label', 'Function Bias', 'form-label');
-      biasLabel.setAttribute('for', 'function-bias');
-      
-      const biasSelect = document.createElement('select');
-      biasSelect.id = 'function-bias';
-      biasSelect.className = 'form-select';
-      
-      const biasOptions = [
-        { value: 'general', label: 'General' },
-        { value: 'technical', label: 'Technical' },
-        { value: 'business_strategy', label: 'Business Strategy' },
-        { value: 'marketing', label: 'Marketing' },
-        { value: 'operations', label: 'Operations' }
-      ];
-      
-      biasOptions.forEach(option => {
-        const optionElement = document.createElement('option');
-        optionElement.value = option.value;
-        setSafeTextContent(optionElement, option.label);
-        biasSelect.appendChild(optionElement);
-      });
-      
-      biasGroup.appendChild(biasLabel);
-      biasGroup.appendChild(biasSelect);
-      
-      // Submit button
-      const submitButton = document.createElement('button');
-      submitButton.type = 'submit';
-      submitButton.className = 'form-submit';
-      setSafeTextContent(submitButton, 'Generate Recommendations');
-      
-      // Form submission handler
-      form.addEventListener('submit', (event) => {
-        event.preventDefault();
-        this.handleJobSubmission(titleInput.value, descTextarea.value, biasSelect.value);
-      });
-      
-      form.appendChild(titleGroup);
-      form.appendChild(descGroup);
-      form.appendChild(biasGroup);
-      form.appendChild(submitButton);
-      
-      return form;
-    }
-    
-    /**
-     * Load Experience tab content
-     */
-    private loadExperienceTab(): void {
-        if (!this.tabContent) return;
-        
-        console.log('Loading Experience tab...');
-        
-        try {
-        // Import and instantiate the ExperienceTab
-        import('./experience-tab').then(({ ExperienceTab }) => {
-            if (this.tabContent) {
-            console.log('Creating ExperienceTab instance...');
-            const experienceTab = new ExperienceTab(this.tabContent);
-            experienceTab.render();
-            console.log('ExperienceTab rendered successfully');
-            }
-        }).catch(error => {
-            console.error('Dynamic import failed:', error);
-            if (this.tabContent) {
-            this.tabContent.innerHTML = `<div style="color: red; padding: 1rem;">
-                Failed to load Experience tab: ${error.message}
-            </div>`;
-            }
-        });
-        } catch (error) {
-        console.error('Experience tab error:', error);
-        if (this.tabContent) {
-            this.tabContent.innerHTML = `<div style="color: red; padding: 1rem;">
-            Experience tab error: ${error instanceof Error ? error.message : 'Unknown error'}
-            </div>`;
-        }
-        }
-    }
-
-    /**
-     * Load Settings tab content  
-     */
-    private loadSettingsTab(): void {
-        if (!this.tabContent) return;
-        
-        const container = createSafeElement('div', '', 'settings-tab');
-        const placeholder = createSafeElement('div', 'Settings configuration coming soon...', 'tab-placeholder');
-        
-        container.appendChild(placeholder);
-        this.tabContent.appendChild(container);
-    }
-    
-    // ============================================================================
-    // Event Handlers
-    // ============================================================================
-    
-    /**
-     * Handle job submission
-     */
-    private async handleJobSubmission(title: string, description: string, bias: string): Promise<void> {
       try {
-        this.showLoading('Generating recommendations...');
+        // Initialize ApplicationTab if not already done
+        if (!this.applicationTab) {
+          this.applicationTab = new ApplicationTab(this.tabContent);
+        }
         
-        // TODO: Integrate with worker communication
-        // For now, just show a placeholder result
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        this.showSuccess('Recommendations generated successfully!');
+        // Render the application tab
+        this.applicationTab.render();
         
       } catch (error) {
-        this.showError(`Failed to generate recommendations: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        this.showError(`Failed to load application tab: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+    }
+    
+    /**
+     * Load Experience tab content (placeholder)
+     */
+/**
+ * Load Experience tab content (FIXED VERSION)
+ * Replace the existing loadExperienceTab() method in app.ts with this
+ */
+private async loadExperienceTab(): Promise<void> {
+    if (!this.tabContent) return;
+    
+    console.log('Loading Experience tab...');
+    
+    try {
+      // Clear content first
+      this.tabContent.innerHTML = '';
+      
+      // Import the ExperienceTab class
+      const { ExperienceTab } = await import('./experience-tab');
+      
+      console.log('ExperienceTab imported successfully');
+      console.log('Creating ExperienceTab instance...');
+      
+      const experienceTab = new ExperienceTab(this.tabContent);
+      
+      console.log('Rendering ExperienceTab...');
+      await experienceTab.render();
+      
+      console.log('ExperienceTab rendered successfully');
+      
+    } catch (error) {
+      console.error('Experience tab error:', error);
+      
+      if (this.tabContent) {
+        this.tabContent.innerHTML = `
+          <div style="color: red; padding: 1rem; border: 1px solid #ff0000; border-radius: 4px; margin: 1rem;">
+            <h3>Experience Tab Error</h3>
+            <p>Failed to load Experience tab: ${error instanceof Error ? error.message : 'Unknown error'}</p>
+            <details>
+              <summary>Click for Error Details</summary>
+              <pre style="background: #f5f5f5; padding: 1rem; margin-top: 0.5rem; overflow: auto;">${error instanceof Error ? error.stack : JSON.stringify(error, null, 2)}</pre>
+            </details>
+            <br>
+            <button onclick="location.reload()" style="padding: 0.5rem 1rem; background: #007cba; color: white; border: none; border-radius: 4px; cursor: pointer;">
+              Reload Page
+            </button>
+          </div>
+        `;
+      }
+    }
+  }
+    
+    /**
+     * Load Settings tab content
+     */
+    private async loadSettingsTab(): Promise<void> {
+      if (!this.tabContent) return;
+      
+      try {
+        // Initialize SettingsTab if not already done
+        if (!this.settingsTab) {
+          this.settingsTab = new SettingsTab(this.tabContent);
+        }
+        
+        // Render the settings tab
+        await this.settingsTab.render();
+        
+      } catch (error) {
+        this.showError(`Failed to load settings tab: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
     }
     

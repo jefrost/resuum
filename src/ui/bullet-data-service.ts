@@ -1,131 +1,211 @@
 /**
- * Bullet data service - storage operations (80 lines)
+ * Bullet Data Service
+ * Manages bullet point data operations (simplified for AI analysis)
  */
 
-import { getAll, create, update, getById } from '../storage/transactions';
-import { queueBulletForEmbedding, markBulletChanged } from '../storage/embedding-state';
-import { createId } from '../utils/uuid';
-import type { Bullet, Role, Project, BulletFeatures } from '../types';
+import { getAll, getById, create, update, deleteById } from '../storage/transactions';
+import type { Bullet, Role, Project } from '../types';
+
+// ============================================================================
+// Bullet Data Service Class
+// ============================================================================
 
 export class BulletDataService {
-  private roles: Role[] = [];
-  private projects: Project[] = [];
-
-  async getBullet(bulletId: string): Promise<Bullet | null> {
-    return getById<Bullet>('bullets', bulletId);
+  /**
+   * Get all bullet points
+   */
+  async getAllBullets(): Promise<Bullet[]> {
+    return getAll<Bullet>('bullets');
   }
 
-  async createBullet(formData: any): Promise<void> {
-    const roleId = await this.ensureRole(formData);
-    const projectId = await this.ensureProject(formData, roleId);
-    
+  /**
+   * Get bullet points by role
+   */
+  async getBulletsByRole(roleId: string): Promise<Bullet[]> {
+    const allBullets = await this.getAllBullets();
+    return allBullets.filter(bullet => bullet.roleId === roleId);
+  }
+
+  /**
+   * Get bullet points by project
+   */
+  async getBulletsByProject(projectId: string): Promise<Bullet[]> {
+    const allBullets = await this.getAllBullets();
+    return allBullets.filter(bullet => bullet.projectId === projectId);
+  }
+
+  /**
+   * Create new bullet point
+   */
+  async createBullet(bulletData: {
+    roleId: string;
+    projectId: string;
+    text: string;
+    source?: 'manual' | 'resume_import';
+  }): Promise<Bullet> {
     const bullet: Bullet = {
-      id: createId('bullet'),
-      roleId,
-      projectId,
-      text: formData.text,
-      source: 'manual',
-      normalizedFingerprint: `temp_${Date.now()}`,
-      features: this.analyzeFeatures(formData.text),
-      embeddingState: 'pending',
-      retryCount: 0,
+      id: `bullet_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      roleId: bulletData.roleId,
+      projectId: bulletData.projectId,
+      text: bulletData.text.trim(),
+      source: bulletData.source || 'manual',
       createdAt: Date.now(),
       lastModified: Date.now()
     };
-    
-    await create('bullets', bullet);
-    await queueBulletForEmbedding(bullet.id);
+
+    return create('bullets', bullet);
   }
 
-  async updateBullet(bulletId: string, formData: any): Promise<void> {
+  /**
+   * Update bullet point
+   */
+  async updateBullet(bulletId: string, updates: {
+    text?: string;
+    projectId?: string;
+  }): Promise<Bullet> {
     const existingBullet = await getById<Bullet>('bullets', bulletId);
-    if (!existingBullet) throw new Error('Bullet not found');
-    
-    const roleId = await this.ensureRole(formData);
-    const projectId = await this.ensureProject(formData, roleId);
-    
+    if (!existingBullet) {
+      throw new Error(`Bullet with id ${bulletId} not found`);
+    }
+
     const updatedBullet: Bullet = {
       ...existingBullet,
-      text: formData.text,
-      roleId,
-      projectId,
-      features: this.analyzeFeatures(formData.text),
+      ...updates,
       lastModified: Date.now()
     };
-    
-    await update('bullets', updatedBullet);
-    
-    if (existingBullet.text !== formData.text) {
-      await markBulletChanged(bulletId);
+
+    if (updates.text) {
+      updatedBullet.text = updates.text.trim();
     }
+
+    return update('bullets', updatedBullet);
   }
 
-  private async ensureRole(data: any): Promise<string> {
-    if (data.roleId !== 'new_role') return data.roleId;
-    
-    await this.loadRoles();
-    
-    const newRole: Role = {
-      id: createId('role'),
-      title: data.newRoleTitle,
-      company: data.newRoleCompany,
-      orderIndex: this.roles.length,
-      bulletsLimit: 3,
-      startDate: new Date().toISOString().slice(0, 7),
-      endDate: null
-    };
-    
-    await create('roles', newRole);
-    this.roles.push(newRole);
-    
-    return newRole.id;
+  /**
+   * Delete bullet point
+   */
+  async deleteBullet(bulletId: string): Promise<void> {
+    await deleteById('bullets', bulletId);
   }
 
-  private async ensureProject(data: any, roleId: string): Promise<string> {
-    if (data.projectId !== 'new_project') {
-      return data.projectId || `no_project_${roleId}`;
+  /**
+   * Get bullets with role and project context
+   */
+  async getBulletsWithContext(): Promise<Array<{
+    bullet: Bullet;
+    role: Role | null;
+    project: Project | null;
+  }>> {
+    const [bullets, roles, projects] = await Promise.all([
+      this.getAllBullets(),
+      getAll<Role>('roles'),
+      getAll<Project>('projects')
+    ]);
+
+    return bullets.map(bullet => ({
+      bullet,
+      role: roles.find(r => r.id === bullet.roleId) || null,
+      project: projects.find(p => p.id === bullet.projectId) || null
+    }));
+  }
+
+  /**
+   * Validate bullet point data
+   */
+  validateBulletData(text: string, roleId: string, projectId: string): {
+    isValid: boolean;
+    errors: string[];
+  } {
+    const errors: string[] = [];
+
+    if (!text || text.trim().length === 0) {
+      errors.push('Bullet point text is required');
     }
-    
-    await this.loadProjects();
-    
-    const newProject: Project = {
-      id: createId('project'),
-      roleId,
-      name: data.newProjectName,
-      description: data.newProjectDescription || '',
-      centroidVector: new ArrayBuffer(0),
-      vectorDimensions: 0,
-      bulletCount: 0,
-      embeddingVersion: 1,
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    };
-    
-    await create('projects', newProject);
-    this.projects.push(newProject);
-    
-    return newProject.id;
-  }
 
-  private analyzeFeatures(text: string): BulletFeatures {
-    const wordCount = text.trim().split(/\s+/).length;
-    
+    if (text && text.trim().length < 10) {
+      errors.push('Bullet point should be at least 10 characters long');
+    }
+
+    if (text && text.trim().length > 500) {
+      errors.push('Bullet point should be less than 500 characters');
+    }
+
+    if (!roleId) {
+      errors.push('Role is required');
+    }
+
+    if (!projectId) {
+      errors.push('Project is required');
+    }
+
     return {
-      hasNumbers: /\d/.test(text),
-      actionVerb: /^(led|managed|developed|created|built|achieved|analyzed|designed|implemented)/i.test(text.trim()),
-      lengthOk: wordCount >= 5 && wordCount <= 22
+      isValid: errors.length === 0,
+      errors
     };
   }
 
-  private async loadRoles(): Promise<void> {
-    if (this.roles.length === 0) {
-      this.roles = await getAll<Role>('roles');
-    }
+  /**
+   * Search bullets by text
+   */
+  async searchBullets(searchTerm: string): Promise<Bullet[]> {
+    const allBullets = await this.getAllBullets();
+    const lowerSearchTerm = searchTerm.toLowerCase();
+    
+    return allBullets.filter(bullet =>
+      bullet.text.toLowerCase().includes(lowerSearchTerm)
+    );
   }
 
-  private async loadProjects(): Promise<void> {
-    if (this.projects.length === 0) {
-      this.projects = await getAll<Project>('projects');
-    }
+  /**
+   * Get bullet statistics
+   */
+  async getBulletStats(): Promise<{
+    totalBullets: number;
+    bulletsByRole: Array<{ roleId: string; count: number }>;
+    bulletsByProject: Array<{ projectId: string; count: number }>;
+  }> {
+    const bullets = await this.getAllBullets();
+    
+    const bulletsByRole = bullets.reduce((acc, bullet) => {
+      const existing = acc.find(item => item.roleId === bullet.roleId);
+      if (existing) {
+        existing.count++;
+      } else {
+        acc.push({ roleId: bullet.roleId, count: 1 });
+      }
+      return acc;
+    }, [] as Array<{ roleId: string; count: number }>);
+
+    const bulletsByProject = bullets.reduce((acc, bullet) => {
+      const existing = acc.find(item => item.projectId === bullet.projectId);
+      if (existing) {
+        existing.count++;
+      } else {
+        acc.push({ projectId: bullet.projectId, count: 1 });
+      }
+      return acc;
+    }, [] as Array<{ projectId: string; count: number }>);
+
+    return {
+      totalBullets: bullets.length,
+      bulletsByRole,
+      bulletsByProject
+    };
   }
+}
+
+// ============================================================================
+// Global Service Instance
+// ============================================================================
+
+let globalBulletDataService: BulletDataService | null = null;
+
+/**
+ * Get global bullet data service instance
+ */
+export function getBulletDataService(): BulletDataService {
+  if (!globalBulletDataService) {
+    globalBulletDataService = new BulletDataService();
+  }
+  return globalBulletDataService;
 }

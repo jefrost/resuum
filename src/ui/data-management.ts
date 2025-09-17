@@ -1,10 +1,10 @@
 /**
  * Data management UI components for bullets and projects
+ * Fixed for simplified data model
  */
 
 import { getAll, update, deleteById } from '../storage/transactions';
-import { markBulletChanged } from '../storage/embedding-state';
-import { createSafeElement, setSafeTextContent, renderBulletPoint } from './xss-safe-rendering';
+import { createSafeElement, setSafeTextContent } from './xss-safe-rendering';
 import type { Bullet, Project, Role } from '../types';
 import { getBulletEditor } from './bullet-editor';
 import { getProjectEditor } from './project-editor';
@@ -111,7 +111,7 @@ export class BulletPointsTable {
     const thead = createSafeElement('thead');
     const headerRow = createSafeElement('tr');
     
-    ['Role', 'Project', 'Bullet Text', 'State', 'Quality', 'Modified', 'Actions'].forEach(text => {
+    ['Role', 'Project', 'Bullet Text', 'Modified', 'Actions'].forEach(text => {
       const th = createSafeElement('th', text);
       headerRow.appendChild(th);
     });
@@ -130,10 +130,10 @@ export class BulletPointsTable {
     
     if (filteredBullets.length === 0) {
       const emptyRow = createSafeElement('tr');
-      const emptyCell = document.createElement('td'); // Use createElement instead
-        emptyCell.textContent = 'No bullet points found';
-        emptyCell.className = 'empty-state';
-        emptyCell.colSpan = 7;
+      const emptyCell = document.createElement('td');
+      emptyCell.textContent = 'No bullet points found';
+      emptyCell.className = 'empty-state';
+      emptyCell.colSpan = 5;
       emptyRow.appendChild(emptyCell);
       tbody.appendChild(emptyRow);
     }
@@ -146,8 +146,7 @@ export class BulletPointsTable {
    * Create a single bullet row
    */
   private async createBulletRow(bullet: Bullet): Promise<HTMLElement> {
-    const row = createSafeElement('tr', '', 
-      `bullet-row bullet-row--${bullet.embeddingState}`);
+    const row = createSafeElement('tr', '', 'bullet-row');
     
     // Role
     const role = this.roles.find(r => r.id === bullet.roleId);
@@ -163,23 +162,11 @@ export class BulletPointsTable {
     
     // Bullet text (truncated with full text on hover)
     const textCell = createSafeElement('td', '', 'text-cell');
-    const bulletElement = renderBulletPoint(bullet.text, bullet.embeddingState);
-    if (bullet.text.length > 80) {
-      const truncatedText = bullet.text.substring(0, 80) + '...';
-      setSafeTextContent(bulletElement.querySelector('.bullet-text') || bulletElement, truncatedText);
-      bulletElement.title = bullet.text;
-    }
-    textCell.appendChild(bulletElement);
-    
-    // Embedding state
-    const stateCell = createSafeElement('td', '', 'state-cell');
-    const stateBadge = this.createStateBadge(bullet);
-    stateCell.appendChild(stateBadge);
-    
-    // Quality indicators
-    const qualityCell = createSafeElement('td', '', 'quality-cell');
-    const qualityBadges = this.createQualityBadges(bullet);
-    qualityCell.appendChild(qualityBadges);
+    const truncatedText = bullet.text.length > 80 
+      ? bullet.text.substring(0, 80) + '...'
+      : bullet.text;
+    setSafeTextContent(textCell, truncatedText);
+    textCell.title = bullet.text; // Full text on hover
     
     // Modified date
     const modifiedCell = createSafeElement('td', 
@@ -201,8 +188,6 @@ export class BulletPointsTable {
     row.appendChild(roleCell);
     row.appendChild(projectCell);
     row.appendChild(textCell);
-    row.appendChild(stateCell);
-    row.appendChild(qualityCell);
     row.appendChild(modifiedCell);
     row.appendChild(actionsCell);
     
@@ -232,76 +217,19 @@ export class BulletPointsTable {
       p.roleId === bullet.roleId && p.id !== bullet.projectId
     );
     
-    for (const project of roleProjects) {
+    roleProjects.forEach(project => {
       const option = document.createElement('option');
       option.value = project.id;
       option.textContent = project.name;
       select.appendChild(option);
-    }
+    });
     
-    select.addEventListener('change', async (e) => {
-      const newProjectId = (e.target as HTMLSelectElement).value;
-      await this.moveBulletToProject(bullet.id, newProjectId);
+    // Handle project change
+    select.addEventListener('change', () => {
+      this.moveBulletToProject(bullet.id, select.value);
     });
     
     return select;
-  }
-
-  /**
-   * Create embedding state badge
-   */
-  private createStateBadge(bullet: Bullet): HTMLElement {
-    const badge = createSafeElement('span', '', 
-      `state-badge state-badge--${bullet.embeddingState}`);
-    
-    const stateLabels = {
-      ready: '✓ Ready',
-      pending: '⏳ Processing',
-      stale: '⚠ Needs Update',
-      failed: '✗ Failed'
-    };
-    
-    setSafeTextContent(badge, stateLabels[bullet.embeddingState] || '? Unknown');
-    
-    if (bullet.embeddingState === 'failed' && bullet.retryCount > 0) {
-      badge.title = `Failed after ${bullet.retryCount} retries`;
-    }
-    
-    return badge;
-  }
-
-  /**
-   * Create quality feature badges
-   */
-  private createQualityBadges(bullet: Bullet): HTMLElement {
-    const container = createSafeElement('div', '', 'quality-badges');
-    
-    const features = [
-      { key: 'hasNumbers', label: '#', title: 'Contains numbers' },
-      { key: 'actionVerb', label: 'V', title: 'Strong action verb' },
-      { key: 'lengthOk', label: 'L', title: 'Good length' }
-    ];
-    
-    for (const feature of features) {
-      const badge = createSafeElement('span', feature.label, 
-        `quality-badge ${bullet.features[feature.key as keyof typeof bullet.features] ? 'quality-badge--active' : 'quality-badge--inactive'}`
-      );
-      badge.title = feature.title;
-      container.appendChild(badge);
-    }
-    
-    return container;
-  }
-
-  /**
-   * Load data from storage
-   */
-  private async loadData(): Promise<void> {
-    [this.bullets, this.projects, this.roles] = await Promise.all([
-      getAll<Bullet>('bullets'),
-      getAll<Project>('projects'),
-      getAll<Role>('roles')
-    ]);
   }
 
   /**
@@ -312,36 +240,42 @@ export class BulletPointsTable {
     
     // Apply text filter
     if (this.filterText) {
-      const filter = this.filterText.toLowerCase();
-      filtered = filtered.filter(bullet => 
-        bullet.text.toLowerCase().includes(filter)
-      );
+      const filterLower = this.filterText.toLowerCase();
+      filtered = filtered.filter(bullet => {
+        const role = this.roles.find(r => r.id === bullet.roleId);
+        const project = this.projects.find(p => p.id === bullet.projectId);
+        
+        return bullet.text.toLowerCase().includes(filterLower) ||
+               role?.title.toLowerCase().includes(filterLower) ||
+               role?.company.toLowerCase().includes(filterLower) ||
+               project?.name.toLowerCase().includes(filterLower);
+      });
     }
     
-    // Sort
+    // Apply sorting
     filtered.sort((a, b) => {
       let compareValue = 0;
       
       switch (this.sortBy) {
+        case 'role':
+          const roleA = this.roles.find(r => r.id === a.roleId)?.title || '';
+          const roleB = this.roles.find(r => r.id === b.roleId)?.title || '';
+          compareValue = roleA.localeCompare(roleB);
+          break;
+        case 'project':
+          const projectA = this.projects.find(p => p.id === a.projectId)?.name || '';
+          const projectB = this.projects.find(p => p.id === b.projectId)?.name || '';
+          compareValue = projectA.localeCompare(projectB);
+          break;
         case 'created':
           compareValue = a.createdAt - b.createdAt;
           break;
         case 'modified':
           compareValue = a.lastModified - b.lastModified;
           break;
-        case 'role':
-          const roleA = this.roles.find(r => r.id === a.roleId);
-          const roleB = this.roles.find(r => r.id === b.roleId);
-          compareValue = (roleA?.orderIndex || 0) - (roleB?.orderIndex || 0);
-          break;
-        case 'project':
-          const projectA = this.projects.find(p => p.id === a.projectId);
-          const projectB = this.projects.find(p => p.id === b.projectId);
-          compareValue = (projectA?.name || '').localeCompare(projectB?.name || '');
-          break;
       }
       
-      return this.sortOrder === 'desc' ? -compareValue : compareValue;
+      return this.sortOrder === 'asc' ? compareValue : -compareValue;
     });
     
     return filtered;
@@ -363,9 +297,6 @@ export class BulletPointsTable {
       
       await update('bullets', updatedBullet);
       
-      // Mark as changed for re-embedding
-      await markBulletChanged(bulletId);
-      
       // Refresh display
       await this.render();
       
@@ -379,15 +310,25 @@ export class BulletPointsTable {
    * Show add bullet modal
    */
   private showAddBulletModal(): void {
-    const editor = getBulletEditor();
-    editor.showAddModal('role_mckinsey_sc', undefined, () => {
-      this.render(); // Refresh the current sample data display
-    });
+    try {
+      const editor = getBulletEditor();
+      editor.showAddModal(undefined, undefined, () => {
+        this.render(); // Refresh the display
+      });
+    } catch (error) {
+      console.error('Error showing add modal:', error);
+      alert('Error opening bullet editor: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    }
   }
   
   private editBullet(bulletId: string): void {
-    const editor = getBulletEditor();
-    editor.showEditModal(bulletId, () => this.render());
+    try {
+      const editor = getBulletEditor();
+      editor.showEditModal(bulletId, () => this.render());
+    } catch (error) {
+      console.error('Error editing bullet:', error);
+      alert('Error opening bullet editor: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    }
   }
 
   /**
@@ -405,6 +346,17 @@ export class BulletPointsTable {
       console.error('Failed to delete bullet:', error);
       alert('Failed to delete bullet point');
     }
+  }
+
+  /**
+   * Load data from storage
+   */
+  private async loadData(): Promise<void> {
+    [this.bullets, this.projects, this.roles] = await Promise.all([
+      getAll<Bullet>('bullets'),
+      getAll<Project>('projects'),
+      getAll<Role>('roles')
+    ]);
   }
 }
 
@@ -454,28 +406,16 @@ export class ProjectsTable {
    * Create projects table
    */
   private createTable(): HTMLElement {
-    const table = createSafeElement('table', '', 'bullets-table data-table');
+    const table = createSafeElement('table', '', 'projects-table data-table');
     
     // Header
     const thead = createSafeElement('thead');
     const headerRow = createSafeElement('tr');
     
-    ['Role', 'Project Name', 'Description', '# Bullets', 'Embedding Status', 'Actions'].forEach((text) => {
-        const th = createSafeElement('th', text);
-        
-        // Set column widths
-        if (text === 'Description') {
-          th.style.width = '40%'; // Make description widest
-        } else if (text === 'Role') {
-          th.style.width = '20%';
-        } else if (text === 'Project Name') {
-          th.style.width = '15%';
-        } else {
-          th.style.width = '8%'; // Smaller columns for bullets, status, actions
-        }
-        
-        headerRow.appendChild(th);
-      });
+    ['Role', 'Project Name', 'Description', '# Bullets', 'Actions'].forEach((text) => {
+      const th = createSafeElement('th', text);
+      headerRow.appendChild(th);
+    });
     
     thead.appendChild(headerRow);
     table.appendChild(thead);
@@ -490,10 +430,10 @@ export class ProjectsTable {
     
     if (this.projects.length === 0) {
       const emptyRow = createSafeElement('tr');
-      const emptyCell = document.createElement('td'); // Use createElement instead
+      const emptyCell = document.createElement('td');
       emptyCell.textContent = 'No projects found';
       emptyCell.className = 'empty-state';
-      emptyCell.colSpan = 6;
+      emptyCell.colSpan = 5;
       emptyRow.appendChild(emptyCell);
       tbody.appendChild(emptyRow);
     }
@@ -519,33 +459,14 @@ export class ProjectsTable {
     
     // Description
     const descCell = createSafeElement('td', 
-      project.description.length > 60 ? 
-        project.description.substring(0, 60) + '...' : 
-        project.description
+      project.description && project.description.length > 60 
+        ? project.description.substring(0, 60) + '...'
+        : project.description || 'No description'
     );
-    if (project.description.length > 60) {
-      descCell.title = project.description;
-    }
     
-    // Bullet count with accuracy indicator
-    const projectBullets = this.bullets.filter(b => b.projectId === project.id);
-    const actualCount = projectBullets.length;
-    const storedCount = project.bulletCount;
-    
-    const countCell = createSafeElement('td', '', 'count-cell');
-    const countText = createSafeElement('span', actualCount.toString());
-    
-    if (actualCount !== storedCount) {
-      countText.className = 'count-mismatch';
-      countText.title = `Stored count: ${storedCount}, Actual: ${actualCount}`;
-    }
-    
-    countCell.appendChild(countText);
-    
-    // Embedding status
-    const statusCell = createSafeElement('td', '', 'status-cell');
-    const statusBadge = this.createEmbeddingStatusBadge(project, projectBullets);
-    statusCell.appendChild(statusBadge);
+    // Bullet count
+    const bulletCount = this.bullets.filter(b => b.projectId === project.id).length;
+    const countCell = createSafeElement('td', bulletCount.toString());
     
     // Actions
     const actionsCell = createSafeElement('td', '', 'actions-cell');
@@ -562,88 +483,35 @@ export class ProjectsTable {
     row.appendChild(nameCell);
     row.appendChild(descCell);
     row.appendChild(countCell);
-    row.appendChild(statusCell);
     row.appendChild(actionsCell);
     
     return row;
   }
 
   /**
-   * Create embedding status badge for project
-   */
-  private createEmbeddingStatusBadge(project: Project, bullets: Bullet[]): HTMLElement {
-    const badge = createSafeElement('div', '', 'embedding-status');
-    
-    if (bullets.length === 0) {
-      badge.className += ' embedding-status--empty';
-      setSafeTextContent(badge, 'No bullets');
-      return badge;
-    }
-    
-    const stateCounts = {
-      ready: 0,
-      pending: 0,
-      stale: 0,
-      failed: 0
-    };
-    
-    bullets.forEach(bullet => {
-      stateCounts[bullet.embeddingState]++;
-    });
-    
-    // Determine overall status
-    if (stateCounts.failed > 0) {
-      badge.className += ' embedding-status--failed';
-      setSafeTextContent(badge, `${stateCounts.failed} failed`);
-    } else if (stateCounts.pending > 0) {
-      badge.className += ' embedding-status--pending';
-      setSafeTextContent(badge, `${stateCounts.pending} processing`);
-    } else if (stateCounts.stale > 0) {
-      badge.className += ' embedding-status--stale';
-      setSafeTextContent(badge, `${stateCounts.stale} stale`);
-    } else {
-      badge.className += ' embedding-status--ready';
-      setSafeTextContent(badge, 'All ready');
-    }
-    
-    // Add centroid status
-    const hasValidCentroid = project.centroidVector.byteLength > 0;
-    if (!hasValidCentroid) {
-      badge.className += ' embedding-status--no-centroid';
-      badge.title = 'Project centroid needs calculation';
-    }
-    
-    return badge;
-  }
-
-  /**
-   * Load data from storage
-   */
-  private async loadData(): Promise<void> {
-    [this.projects, this.roles, this.bullets] = await Promise.all([
-      getAll<Project>('projects'),
-      getAll<Role>('roles'),
-      getAll<Bullet>('bullets')
-    ]);
-  }
-
-  /**
    * Show add project modal
    */
   private showAddProjectModal(): void {
-    const editor = getProjectEditor();
-    const firstRole = this.roles[0];
-    const defaultRoleId = firstRole ? firstRole.id : undefined;
-    
-    editor.showAddModal(defaultRoleId, () => this.render());
+    try {
+      const editor = getProjectEditor();
+      editor.showAddModal(undefined, () => this.render());
+    } catch (error) {
+      console.error('Error showing add project modal:', error);
+      alert('Error opening project editor: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    }
   }
 
   /**
    * Edit project
    */
   private editProject(projectId: string): void {
-    const editor = getProjectEditor();
-    editor.showEditModal(projectId, () => this.render());
+    try {
+      const editor = getProjectEditor();
+      editor.showEditModal(projectId, () => this.render());
+    } catch (error) {
+      console.error('Error editing project:', error);
+      alert('Error opening project editor: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    }
   }
 
   /**
@@ -657,14 +525,11 @@ export class ProjectsTable {
     
     if (projectBullets.length > 0) {
       const confirmMessage = `This project has ${projectBullets.length} bullet points. ` +
-        `Deleting it will move them to "No Project". Continue?`;
+        `Deleting it will remove them. Continue?`;
       
       if (!confirm(confirmMessage)) {
         return;
       }
-      
-      // Move bullets to "No Project" for this role
-      // Implementation would go here
     }
     
     if (!confirm(`Are you sure you want to delete "${project.name}"?`)) {
@@ -678,5 +543,16 @@ export class ProjectsTable {
       console.error('Failed to delete project:', error);
       alert('Failed to delete project');
     }
+  }
+
+  /**
+   * Load data from storage
+   */
+  private async loadData(): Promise<void> {
+    [this.projects, this.roles, this.bullets] = await Promise.all([
+      getAll<Project>('projects'),
+      getAll<Role>('roles'),
+      getAll<Bullet>('bullets')
+    ]);
   }
 }
