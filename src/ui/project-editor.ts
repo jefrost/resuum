@@ -1,84 +1,90 @@
 /**
- * Project editor modal
+ * Project Editor Modal
+ * Simplified to use ProjectFormBuilder
  */
 
-import { getAll, create, update, getById } from '../storage/transactions';
+import { getAll, create, update, getById, deleteById } from '../storage/transactions';
 import { createSafeElement } from './xss-safe-rendering';
 import { createId } from '../utils/uuid';
-import type { Project, Role } from '../types';
+import { ProjectFormBuilder } from './project-form-builder';
+import type { Project, Bullet } from '../types';
 
 export class ProjectEditor {
   private modal: HTMLElement | null = null;
   private currentProjectId: string | null = null;
   private onSave?: (() => void) | undefined;
-  private roles: Role[] = [];
+  private formBuilder: ProjectFormBuilder;
 
-  /**
-   * Show editor for new project
-   */
+  constructor() {
+    this.formBuilder = new ProjectFormBuilder();
+  }
+
   async showAddModal(defaultRoleId?: string, onSave?: () => void): Promise<void> {
     this.currentProjectId = null;
     this.onSave = onSave;
     
-    await this.loadRoles();
-    
     await this.showModal({
       title: 'Add Project',
       project: null,
+      bullets: [],
+      isEdit: false,
       ...(defaultRoleId && { defaultRoleId })
     });
-    
   }
 
-  /**
-   * Show editor for existing project
-   */
   async showEditModal(projectId: string, onSave?: () => void): Promise<void> {
     this.currentProjectId = projectId;
     this.onSave = onSave;
-    
-    await this.loadRoles();
     
     const project = await getById<Project>('projects', projectId);
     if (!project) {
       throw new Error('Project not found');
     }
     
+    const bullets = await this.loadProjectBullets(projectId);
+    
     await this.showModal({
       title: 'Edit Project',
       project,
+      bullets,
+      isEdit: true,
       defaultRoleId: project.roleId
     });
   }
 
-  /**
-   * Load roles data
-   */
-  private async loadRoles(): Promise<void> {
-    this.roles = await getAll<Role>('roles');
-    this.roles.sort((a, b) => a.orderIndex - b.orderIndex);
+  private async loadProjectBullets(projectId: string): Promise<Bullet[]> {
+    const allBullets = await getAll<Bullet>('bullets');
+    const projectBullets = allBullets.filter(bullet => bullet.projectId === projectId);
+    return projectBullets.sort((a, b) => a.createdAt - b.createdAt);
   }
 
-  /**
-   * Show the modal with form
-   */
   private async showModal(config: {
     title: string;
     project: Project | null;
+    bullets: Bullet[];
+    isEdit: boolean;
     defaultRoleId?: string;
   }): Promise<void> {
     this.hideModal();
     
     this.modal = this.createModalStructure(config.title);
-    const form = this.createForm(config);
+    const formConfig = {
+      project: config.project,
+      bullets: config.bullets,
+      isEdit: config.isEdit,
+      ...(config.defaultRoleId && { defaultRoleId: config.defaultRoleId })
+    };
+    
+    const form = await this.formBuilder.createForm(
+      formConfig,
+      (data) => this.handleSubmit(data),
+      () => this.hideModal()
+    );
     
     this.modal.querySelector('.modal-body')!.appendChild(form);
     this.showModalElement();
   }
 
-  /**
-   * Create modal structure
-   */
   private createModalStructure(title: string): HTMLElement {
     const modal = createSafeElement('div', '', 'modal-overlay');
     const content = createSafeElement('div', '', 'modal-content project-editor-modal');
@@ -95,220 +101,58 @@ export class ProjectEditor {
     return modal;
   }
 
-  /**
-   * Create form
-   */
-  private createForm(config: any): HTMLElement {
-    const form = document.createElement('form');
-    form.className = 'project-form';
-    
-    // Role selection
-    const roleGroup = this.createRoleSelection(config.defaultRoleId);
-    
-    // Project name
-    const nameGroup = document.createElement('div');
-    nameGroup.className = 'form-group';
-    const nameLabel = document.createElement('label');
-    nameLabel.textContent = 'Project Name';
-    nameLabel.className = 'form-label';
-    const nameInput = document.createElement('input');
-    nameInput.id = 'project-name';
-    nameInput.type = 'text';
-    nameInput.className = 'form-input';
-    nameInput.placeholder = 'Enter project name...';
-    nameInput.value = config.project?.name || '';
-    nameGroup.append(nameLabel, nameInput);
-    
-    // Description
-    const descGroup = document.createElement('div');
-    descGroup.className = 'form-group';
-    const descLabel = document.createElement('label');
-    descLabel.textContent = 'Description';
-    descLabel.className = 'form-label';
-    const descInput = document.createElement('textarea');
-    descInput.id = 'project-description';
-    descInput.className = 'form-textarea';
-    descInput.placeholder = 'Enter description...';
-    descInput.rows = 3;
-    descInput.value = config.project?.description || '';
-    descGroup.append(descLabel, descInput);
-    
-    // Buttons
-    const buttonGroup = this.createButtons(config.project !== null);
-    
-    form.append(roleGroup, nameGroup, descGroup, buttonGroup);
-    
-    // Set up form submission
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      await this.handleSubmit();
-    });
-    
-    return form;
-  }
-
-  /**
-   * Create role selection
-   */
-  private createRoleSelection(defaultRoleId?: string): HTMLElement {
-    const group = createSafeElement('div', '', 'form-group');
-    const label = createSafeElement('label', 'Role', 'form-label');
-    const select = document.createElement('select');
-    
-    select.id = 'project-role';
-    select.className = 'form-select';
-    
-    // Add roles
-    this.roles.forEach(role => {
-      const option = document.createElement('option');
-      option.value = role.id;
-      option.textContent = `${role.title} (${role.company})`;
-      option.selected = role.id === defaultRoleId;
-      select.appendChild(option);
-    });
-    
-    group.append(label, select);
-    return group;
-  }
-
-  /**
-   * Create form buttons
-   */
-  private createButtons(isEdit: boolean): HTMLElement {
-    const group = createSafeElement('div', '', 'modal-buttons');
-    
-    const cancelBtn = document.createElement('button');
-    cancelBtn.type = 'button';
-    cancelBtn.textContent = 'Cancel';
-    cancelBtn.className = 'btn btn-secondary';
-    cancelBtn.onclick = () => this.hideModal();
-    
-    const saveBtn = document.createElement('button');
-    saveBtn.type = 'submit';
-    saveBtn.textContent = isEdit ? 'Update' : 'Create';
-    saveBtn.className = 'btn btn-primary';
-    
-    group.append(cancelBtn, saveBtn);
-    return group;
-  }
-
-  /**
-   * Show modal element and set up events
-   */
   private showModalElement(): void {
     const mainContent = document.querySelector('.main-content') || document.body;
     mainContent.appendChild(this.modal!);
     
-    // Enable all inputs and focus name input
     setTimeout(() => {
-      const allInputs = this.modal!.querySelectorAll('input, textarea');
-      allInputs.forEach((input: any) => {
-        input.disabled = false;
-        input.readOnly = false;
-      });
-      
-      const nameInput = this.modal!.querySelector('#project-name') as HTMLInputElement;
-      nameInput?.focus();
+      const firstInput = this.modal!.querySelector('input, textarea') as HTMLInputElement;
+      firstInput?.focus();
     }, 100);
+    
+    document.onkeydown = (e) => {
+      if (e.key === 'Escape') {
+        this.hideModal();
+      }
+    };
   }
 
-  /**
-   * Handle form submission
-   */
-  private async handleSubmit(): Promise<void> {
-    if (!this.modal) return;
-    
-    const formData = this.getFormData();
-    
-    // Validation
-    const validation = this.validateFormData(formData);
-    if (!validation.isValid) {
-      alert(validation.errors.join('\n'));
-      return;
-    }
-    
+  private async handleSubmit(formData: any): Promise<void> {
     try {
       if (this.currentProjectId) {
-        await this.updateProject(this.currentProjectId, formData);
+        await this.updateProject(formData);
+        await this.updateProjectBullets(formData);
       } else {
-        await this.createProject(formData);
+        const project = await this.createProject(formData);
+        await this.createProjectBullets(formData, project.id);
       }
       
       this.hideModal();
-      
-      if (this.onSave) {
-        this.onSave();
-      }
+      this.onSave?.();
       
     } catch (error) {
-      console.error('Failed to save project:', error);
-      alert('Failed to save project');
+      alert(error instanceof Error ? error.message : 'An error occurred');
     }
   }
 
-  /**
-   * Get form data
-   */
-  private getFormData(): any {
-    if (!this.modal) return {};
-    
-    return {
-      roleId: (this.modal.querySelector('#project-role') as HTMLSelectElement).value,
-      name: (this.modal.querySelector('#project-name') as HTMLInputElement).value.trim(),
-      description: (this.modal.querySelector('#project-description') as HTMLTextAreaElement).value.trim()
-    };
-  }
-
-  /**
-   * Validate form data
-   */
-  private validateFormData(data: any): { isValid: boolean; errors: string[] } {
-    const errors: string[] = [];
-    
-    if (!data.name) {
-      errors.push('Please enter a project name');
-    }
-    
-    if (data.name.length > 100) {
-      errors.push('Project name is too long (maximum 100 characters)');
-    }
-    
-    if (data.description.length > 500) {
-      errors.push('Description is too long (maximum 500 characters)');
-    }
-    
-    if (!data.roleId) {
-      errors.push('Please select a role');
-    }
-    
-    return {
-      isValid: errors.length === 0,
-      errors
-    };
-  }
-
-  /**
-   * Create new project (FIXED - removed embedding fields)
-   */
-  private async createProject(formData: any): Promise<void> {
-    const project: Project = {
+  private async createProject(formData: any): Promise<Project> {
+    const newProject: Project = {
       id: createId('project'),
       roleId: formData.roleId,
       name: formData.name,
       description: formData.description,
-      bulletCount: 0,
+      bulletCount: formData.bulletTexts.length,
       createdAt: Date.now(),
       updatedAt: Date.now()
     };
     
-    await create('projects', project);
+    return await create('projects', newProject);
   }
 
-  /**
-   * Update existing project
-   */
-  private async updateProject(projectId: string, formData: any): Promise<void> {
-    const existingProject = await getById<Project>('projects', projectId);
+  private async updateProject(formData: any): Promise<void> {
+    if (!this.currentProjectId) return;
+    
+    const existingProject = await getById<Project>('projects', this.currentProjectId);
     if (!existingProject) {
       throw new Error('Project not found');
     }
@@ -318,16 +162,42 @@ export class ProjectEditor {
       roleId: formData.roleId,
       name: formData.name,
       description: formData.description,
+      bulletCount: formData.bulletTexts.length,
       updatedAt: Date.now()
     };
     
     await update('projects', updatedProject);
   }
 
-  /**
-   * Hide modal
-   */
-  private hideModal(): void {
+  private async createProjectBullets(formData: any, projectId: string): Promise<void> {
+    for (const bulletText of formData.bulletTexts) {
+      const newBullet: Bullet = {
+        id: createId('bullet'),
+        roleId: formData.roleId,
+        projectId: projectId,
+        text: bulletText,
+        source: 'manual',
+        createdAt: Date.now(),
+        lastModified: Date.now()
+      };
+      
+      await create('bullets', newBullet);
+    }
+  }
+
+  private async updateProjectBullets(formData: any): Promise<void> {
+    if (!this.currentProjectId) return;
+    
+    // Delete existing bullets and recreate
+    const existingBullets = await this.loadProjectBullets(this.currentProjectId);
+    for (const bullet of existingBullets) {
+      await deleteById('bullets', bullet.id);
+    }
+    
+    await this.createProjectBullets(formData, this.currentProjectId);
+  }
+
+  hideModal(): void {
     this.modal?.remove();
     this.modal = null;
     this.currentProjectId = null;
@@ -335,10 +205,6 @@ export class ProjectEditor {
     document.onkeydown = null;
   }
 }
-
-// ============================================================================
-// Global Editor Instance
-// ============================================================================
 
 let globalProjectEditor: ProjectEditor | null = null;
 

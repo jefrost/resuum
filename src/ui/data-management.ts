@@ -1,6 +1,6 @@
 /**
  * Data management UI components for bullets and projects
- * Fixed for simplified data model
+ * Enhanced with project table sorting
  */
 
 import { getAll, update, deleteById } from '../storage/transactions';
@@ -85,8 +85,7 @@ export class BulletPointsTable {
     });
     
     const orderButton = createSafeElement('button', 
-      this.sortOrder === 'asc' ? '↑' : '↓', 
-      'btn btn-sm'
+      this.sortOrder === 'asc' ? '↑' : '↓', 'btn btn-sm'
     );
     orderButton.addEventListener('click', () => {
       this.sortOrder = this.sortOrder === 'asc' ? 'desc' : 'asc';
@@ -102,40 +101,31 @@ export class BulletPointsTable {
   }
 
   /**
-   * Create the bullets table
+   * Create bullets table
    */
   private async createTable(): Promise<HTMLElement> {
-    const table = createSafeElement('table', '', 'bullets-table data-table');
+    const table = createSafeElement('table', '', 'bullets-table');
     
-    // Header
-    const thead = createSafeElement('thead');
-    const headerRow = createSafeElement('tr');
+    // Table header
+    const thead = document.createElement('thead');
+    const headerRow = document.createElement('tr');
     
-    ['Role', 'Project', 'Bullet Text', 'Modified', 'Actions'].forEach(text => {
-      const th = createSafeElement('th', text);
+    ['Role', 'Project', 'Bullet Text', 'Modified', 'Actions'].forEach(header => {
+      const th = document.createElement('th');
+      setSafeTextContent(th, header);
       headerRow.appendChild(th);
     });
     
     thead.appendChild(headerRow);
     table.appendChild(thead);
     
-    // Body
-    const tbody = createSafeElement('tbody');
-    const filteredBullets = this.getFilteredAndSortedBullets();
+    // Table body
+    const tbody = document.createElement('tbody');
+    const sortedBullets = this.sortAndFilterBullets();
     
-    for (const bullet of filteredBullets) {
-      const row = await this.createBulletRow(bullet);
+    for (const bullet of sortedBullets) {
+      const row = this.createBulletRow(bullet);
       tbody.appendChild(row);
-    }
-    
-    if (filteredBullets.length === 0) {
-      const emptyRow = createSafeElement('tr');
-      const emptyCell = document.createElement('td');
-      emptyCell.textContent = 'No bullet points found';
-      emptyCell.className = 'empty-state';
-      emptyCell.colSpan = 5;
-      emptyRow.appendChild(emptyCell);
-      tbody.appendChild(emptyRow);
     }
     
     table.appendChild(tbody);
@@ -143,10 +133,10 @@ export class BulletPointsTable {
   }
 
   /**
-   * Create a single bullet row
+   * Create bullet row
    */
-  private async createBulletRow(bullet: Bullet): Promise<HTMLElement> {
-    const row = createSafeElement('tr', '', 'bullet-row');
+  private createBulletRow(bullet: Bullet): HTMLElement {
+    const row = document.createElement('tr');
     
     // Role
     const role = this.roles.find(r => r.id === bullet.roleId);
@@ -157,7 +147,7 @@ export class BulletPointsTable {
     
     // Project with edit dropdown
     const projectCell = createSafeElement('td', '', 'project-cell');
-    const projectSelect = await this.createProjectSelect(bullet);
+    const projectSelect = this.createProjectSelect(bullet);
     projectCell.appendChild(projectSelect);
     
     // Bullet text (truncated with full text on hover)
@@ -197,34 +187,21 @@ export class BulletPointsTable {
   /**
    * Create project selection dropdown for bullet
    */
-  private async createProjectSelect(bullet: Bullet): Promise<HTMLElement> {
+  private createProjectSelect(bullet: Bullet): HTMLElement {
     const select = document.createElement('select');
     select.className = 'project-select';
     
     const currentProject = this.projects.find(p => p.id === bullet.projectId);
-    
-    // Add current project first
-    if (currentProject) {
-      const currentOption = document.createElement('option');
-      currentOption.value = currentProject.id;
-      currentOption.textContent = currentProject.name;
-      currentOption.selected = true;
-      select.appendChild(currentOption);
-    }
-    
-    // Add other projects for the same role
-    const roleProjects = this.projects.filter(p => 
-      p.roleId === bullet.roleId && p.id !== bullet.projectId
-    );
+    const roleProjects = this.projects.filter(p => p.roleId === bullet.roleId);
     
     roleProjects.forEach(project => {
       const option = document.createElement('option');
       option.value = project.id;
       option.textContent = project.name;
+      option.selected = project.id === bullet.projectId;
       select.appendChild(option);
     });
     
-    // Handle project change
     select.addEventListener('change', () => {
       this.moveBulletToProject(bullet.id, select.value);
     });
@@ -233,40 +210,45 @@ export class BulletPointsTable {
   }
 
   /**
-   * Get filtered and sorted bullets
+   * Sort and filter bullets
    */
-  private getFilteredAndSortedBullets(): Bullet[] {
-    let filtered = this.bullets;
+  private sortAndFilterBullets(): Bullet[] {
+    let filtered = this.bullets.filter(bullet => {
+      if (!this.filterText) return true;
+      
+      const role = this.roles.find(r => r.id === bullet.roleId);
+      const project = this.projects.find(p => p.id === bullet.projectId);
+      
+      const searchText = [
+        bullet.text,
+        role?.title,
+        role?.company,
+        project?.name
+      ].filter(Boolean).join(' ').toLowerCase();
+      
+      return searchText.includes(this.filterText.toLowerCase());
+    });
     
-    // Apply text filter
-    if (this.filterText) {
-      const filterLower = this.filterText.toLowerCase();
-      filtered = filtered.filter(bullet => {
-        const role = this.roles.find(r => r.id === bullet.roleId);
-        const project = this.projects.find(p => p.id === bullet.projectId);
-        
-        return bullet.text.toLowerCase().includes(filterLower) ||
-               role?.title.toLowerCase().includes(filterLower) ||
-               role?.company.toLowerCase().includes(filterLower) ||
-               project?.name.toLowerCase().includes(filterLower);
-      });
-    }
-    
-    // Apply sorting
     filtered.sort((a, b) => {
       let compareValue = 0;
       
       switch (this.sortBy) {
-        case 'role':
-          const roleA = this.roles.find(r => r.id === a.roleId)?.title || '';
-          const roleB = this.roles.find(r => r.id === b.roleId)?.title || '';
-          compareValue = roleA.localeCompare(roleB);
+        case 'role': {
+          const roleA = this.roles.find(r => r.id === a.roleId);
+          const roleB = this.roles.find(r => r.id === b.roleId);
+          const nameA = roleA ? `${roleA.company} ${roleA.title}` : '';
+          const nameB = roleB ? `${roleB.company} ${roleB.title}` : '';
+          compareValue = nameA.localeCompare(nameB);
           break;
-        case 'project':
-          const projectA = this.projects.find(p => p.id === a.projectId)?.name || '';
-          const projectB = this.projects.find(p => p.id === b.projectId)?.name || '';
-          compareValue = projectA.localeCompare(projectB);
+        }
+        case 'project': {
+          const projectA = this.projects.find(p => p.id === a.projectId);
+          const projectB = this.projects.find(p => p.id === b.projectId);
+          const nameA = projectA?.name || '';
+          const nameB = projectB?.name || '';
+          compareValue = nameA.localeCompare(nameB);
           break;
+        }
         case 'created':
           compareValue = a.createdAt - b.createdAt;
           break;
@@ -361,7 +343,7 @@ export class BulletPointsTable {
 }
 
 // ============================================================================
-// Projects Table Component
+// Projects Table Component - ENHANCED WITH SORTING
 // ============================================================================
 
 export class ProjectsTable {
@@ -369,6 +351,8 @@ export class ProjectsTable {
   private projects: Project[] = [];
   private roles: Role[] = [];
   private bullets: Bullet[] = [];
+  private sortBy: 'role' | 'project' | 'bulletCount' = 'role';
+  private sortOrder: 'asc' | 'desc' = 'asc';
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -390,15 +374,54 @@ export class ProjectsTable {
   }
 
   /**
-   * Create header with add button
+   * Create table header with controls
    */
   private createHeader(): HTMLElement {
     const header = createSafeElement('div', '', 'projects-header');
+    header.style.marginBottom = '1rem';
+    header.style.display = 'flex';
+    header.style.gap = '1rem';
+    header.style.alignItems = 'center';
     
+    // Add project button
     const addButton = createSafeElement('button', '+ Add Project', 'btn btn-primary');
     addButton.addEventListener('click', () => this.showAddProjectModal());
     
+    // Sort controls
+    const sortLabel = createSafeElement('label', 'Sort by: ');
+    const sortSelect = document.createElement('select');
+    sortSelect.className = 'sort-select';
+    
+    [
+      { value: 'role', label: 'Role' },
+      { value: 'project', label: 'Project Name' },
+      { value: 'bulletCount', label: 'Bullet Count' }
+    ].forEach(option => {
+      const opt = document.createElement('option');
+      opt.value = option.value;
+      opt.textContent = option.label;
+      opt.selected = this.sortBy === option.value;
+      sortSelect.appendChild(opt);
+    });
+    
+    sortSelect.addEventListener('change', (e) => {
+      this.sortBy = (e.target as HTMLSelectElement).value as any;
+      this.render();
+    });
+    
+    const orderButton = createSafeElement('button', 
+      this.sortOrder === 'asc' ? '↑ A→Z' : '↓ Z→A', 'btn btn-sm'
+    );
+    orderButton.addEventListener('click', () => {
+      this.sortOrder = this.sortOrder === 'asc' ? 'desc' : 'asc';
+      this.render();
+    });
+    
     header.appendChild(addButton);
+    header.appendChild(sortLabel);
+    header.appendChild(sortSelect);
+    header.appendChild(orderButton);
+    
     return header;
   }
 
@@ -406,36 +429,67 @@ export class ProjectsTable {
    * Create projects table
    */
   private createTable(): HTMLElement {
-    const table = createSafeElement('table', '', 'projects-table data-table');
+    const table = createSafeElement('table', '', 'projects-table');
     
-    // Header
-    const thead = createSafeElement('thead');
-    const headerRow = createSafeElement('tr');
+    // Table header
+    const thead = document.createElement('thead');
+    const headerRow = document.createElement('tr');
     
-    ['Role', 'Project Name', 'Description', '# Bullets', 'Actions'].forEach((text) => {
-      const th = createSafeElement('th', text);
+    // Clickable column headers
+    const columns = [
+      { key: 'role', label: 'Role' },
+      { key: 'project', label: 'Project Name' },
+      { key: null, label: 'Description' },
+      { key: 'bulletCount', label: '# Bullets' },
+      { key: null, label: 'Actions' }
+    ];
+    
+    columns.forEach(col => {
+      const th = document.createElement('th');
+      
+      if (col.key) {
+        th.style.cursor = 'pointer';
+        th.style.userSelect = 'none';
+        
+        const content = document.createElement('span');
+        setSafeTextContent(content, col.label);
+        
+        // Add sort indicator
+        if (this.sortBy === col.key) {
+          const indicator = document.createElement('span');
+          setSafeTextContent(indicator, this.sortOrder === 'asc' ? ' ↑' : ' ↓');
+          indicator.style.marginLeft = '0.25rem';
+          content.appendChild(indicator);
+        }
+        
+        th.appendChild(content);
+        
+        th.addEventListener('click', () => {
+          if (this.sortBy === col.key) {
+            this.sortOrder = this.sortOrder === 'asc' ? 'desc' : 'asc';
+          } else {
+            this.sortBy = col.key as any;
+            this.sortOrder = 'asc';
+          }
+          this.render();
+        });
+      } else {
+        setSafeTextContent(th, col.label);
+      }
+      
       headerRow.appendChild(th);
     });
     
     thead.appendChild(headerRow);
     table.appendChild(thead);
     
-    // Body
-    const tbody = createSafeElement('tbody');
+    // Table body
+    const tbody = document.createElement('tbody');
+    const sortedProjects = this.sortProjects();
     
-    for (const project of this.projects) {
+    for (const project of sortedProjects) {
       const row = this.createProjectRow(project);
       tbody.appendChild(row);
-    }
-    
-    if (this.projects.length === 0) {
-      const emptyRow = createSafeElement('tr');
-      const emptyCell = document.createElement('td');
-      emptyCell.textContent = 'No projects found';
-      emptyCell.className = 'empty-state';
-      emptyCell.colSpan = 5;
-      emptyRow.appendChild(emptyCell);
-      tbody.appendChild(emptyRow);
     }
     
     table.appendChild(tbody);
@@ -443,10 +497,57 @@ export class ProjectsTable {
   }
 
   /**
+   * Sort projects based on current sort settings
+   */
+  private sortProjects(): Project[] {
+    const sorted = [...this.projects];
+    
+    sorted.sort((a, b) => {
+      let compareValue = 0;
+      
+      switch (this.sortBy) {
+        case 'role': {
+          const roleA = this.roles.find(r => r.id === a.roleId);
+          const roleB = this.roles.find(r => r.id === b.roleId);
+          
+          // Sort by end date (current roles first, then most recent)
+          const endDateA = roleA?.endDate;
+          const endDateB = roleB?.endDate;
+          
+          // Null end dates (current roles) should come first
+          if (!endDateA && !endDateB) {
+            // Both current roles, sort by company then title
+            const companyA = roleA?.company || '';
+            const companyB = roleB?.company || '';
+            compareValue = companyA.localeCompare(companyB);
+            if (compareValue === 0) {
+              const titleA = roleA?.title || '';
+              const titleB = roleB?.title || '';
+              compareValue = titleA.localeCompare(titleB);
+            }
+          } else if (!endDateA) {
+            compareValue = -1; // A is current, B is not
+          } else if (!endDateB) {
+            compareValue = 1; // B is current, A is not
+          } else {
+            // Both have end dates, sort by most recent end date
+            compareValue = endDateB.localeCompare(endDateA);
+          }
+          break;
+        }
+      }
+      
+      return this.sortOrder === 'asc' ? compareValue : -compareValue;
+    });
+    
+    return sorted;
+  }
+
+  /**
    * Create project row
    */
   private createProjectRow(project: Project): HTMLElement {
-    const row = createSafeElement('tr', '', 'project-row');
+    const row = document.createElement('tr');
     
     // Role
     const role = this.roles.find(r => r.id === project.roleId);
@@ -525,15 +626,11 @@ export class ProjectsTable {
     
     if (projectBullets.length > 0) {
       const confirmMessage = `This project has ${projectBullets.length} bullet points. ` +
-        `Deleting it will remove them. Continue?`;
+        `Deleting it will remove them from the project but keep the bullets. Continue?`;
       
       if (!confirm(confirmMessage)) {
         return;
       }
-    }
-    
-    if (!confirm(`Are you sure you want to delete "${project.name}"?`)) {
-      return;
     }
     
     try {
