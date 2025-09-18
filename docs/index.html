@@ -2423,6 +2423,7 @@ ${role.company}` : "Unknown Role"
   // src/workers/openai-service.ts
   init_transactions();
   var DEFAULT_CHAT_MODEL = "gpt-4o-mini";
+  var DEFAULT_TIMEOUT_MS = 45e3;
   var OpenAIService = class {
     name = "OpenAI";
     supportsBrowserFetch = true;
@@ -2518,12 +2519,13 @@ ${role.company}` : "Unknown Role"
       }
     }
     /**
-     * Create chat completion with OpenAI API
+     * Create chat completion with OpenAI API - with timeout and retry
      */
     async createChatCompletion(params) {
       if (!this.hasApiKey()) {
         throw this.createError("ERR_NO_KEY" /* NO_KEY */, "OpenAI API key is required");
       }
+      const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
       const requestBody = {
         model: params.model || DEFAULT_CHAT_MODEL,
         messages: params.messages,
@@ -2534,19 +2536,55 @@ ${role.company}` : "Unknown Role"
         requestBody.response_format = params.response_format;
       }
       try {
+        return await this.makeRequest(requestBody, timeoutMs);
+      } catch (error) {
+        const isTimeout = this.isTimeoutError(error);
+        const isNetworkError = this.isNetworkError(error);
+        if (!isTimeout && !isNetworkError) {
+          throw error;
+        }
+        console.warn("OpenAI request failed, retrying with reduced tokens:", error);
+        const retryBody = {
+          ...requestBody,
+          max_tokens: Math.max(200, Math.floor((requestBody.max_tokens ?? 1e3) * 0.6))
+        };
+        const retryTimeout = Math.max(12e3, Math.floor(timeoutMs * 0.6));
+        try {
+          return await this.makeRequest(retryBody, retryTimeout);
+        } catch (retryError) {
+          throw error;
+        }
+      }
+    }
+    /**
+     * Make HTTP request with timeout
+     */
+    async makeRequest(requestBody, timeoutMs) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      try {
         const response = await fetch("https://api.openai.com/v1/chat/completions", {
           method: "POST",
           headers: {
             "Authorization": `Bearer ${this.getApiKey()}`,
             "Content-Type": "application/json"
           },
-          body: JSON.stringify(requestBody)
+          body: JSON.stringify(requestBody),
+          signal: controller.signal
         });
+        clearTimeout(timeoutId);
         if (!response.ok) {
           throw await this.handleAPIError(response);
         }
         return await response.json();
       } catch (error) {
+        clearTimeout(timeoutId);
+        if (error instanceof Error && error.name === "AbortError") {
+          throw this.createError(
+            "ERR_TIMEOUT" /* TIMEOUT_ERROR */,
+            `Request timeout after ${timeoutMs}ms`
+          );
+        }
         if (error instanceof Error && "code" in error) {
           throw error;
         }
@@ -2555,6 +2593,26 @@ ${role.company}` : "Unknown Role"
           `Network error: ${error instanceof Error ? error.message : "Unknown error"}`
         );
       }
+    }
+    /**
+     * Check if error is timeout-related
+     */
+    isTimeoutError(error) {
+      if (error instanceof Error && "code" in error) {
+        return error.code === "ERR_TIMEOUT" /* TIMEOUT_ERROR */;
+      }
+      const message = String(error?.message || "").toLowerCase();
+      return message.includes("timeout") || message.includes("abort");
+    }
+    /**
+     * Check if error is network-related
+     */
+    isNetworkError(error) {
+      if (error instanceof Error && "code" in error) {
+        return error.code === "ERR_NETWORK" /* NETWORK_ERROR */;
+      }
+      const message = String(error?.message || "").toLowerCase();
+      return message.includes("network") || message.includes("fetch");
     }
     /**
      * Create embeddings
@@ -2667,6 +2725,8 @@ ${role.company}` : "Unknown Role"
           return "Error processing response. Please try again";
         case "ERR_NETWORK" /* NETWORK_ERROR */:
           return "Network error. Please check your connection and try again";
+        case "ERR_TIMEOUT" /* TIMEOUT_ERROR */:
+          return "Request timed out. Please try again";
         default:
           return "Unknown error occurred";
       }
@@ -2866,13 +2926,15 @@ Return ONLY the JSON object, no explanations or additional text.`;
   }
 
   // src/workers/openai-batch-scorer.ts
-  var MAX_TOKENS_PER_BATCH = 4e3;
+  var MAX_TOKENS_PER_BATCH = 2500;
   var MIN_BATCH_SIZE = 8;
-  var MAX_BATCH_SIZE = 20;
-  var TOKENS_PER_CHAR = 0.3;
+  var MAX_BATCH_SIZE = 12;
+  var TOKENS_PER_CHAR = 0.25;
+  var CONCURRENCY = 2;
+  var MAX_JD_CHARS = 800;
   var OpenAIBatchScorer = class {
     /**
-     * Score bullets using OpenAI in batches
+     * Score bullets using OpenAI in batches with concurrency
      */
     async scoreBullets(jobAnalysis, bullets, onProgress) {
       const openaiService = getOpenAIService();
@@ -2884,33 +2946,49 @@ Return ONLY the JSON object, no explanations or additional text.`;
         throw new Error("No batches created - insufficient bullet data");
       }
       const allScored = [];
-      for (let i = 0; i < batches.length; i++) {
-        const batch = batches[i];
-        if (!batch) {
-          console.warn(`Batch ${i} is undefined, skipping`);
-          continue;
-        }
-        const progress = 0.4 + i / batches.length * 0.4;
-        onProgress?.(`OpenAI scoring (batch ${i + 1}/${batches.length})...`, progress);
-        try {
-          const scored = await this.scoreBatch(batch, openaiService);
-          allScored.push(...scored);
-        } catch (error) {
-          console.warn(`OpenAI batch ${i + 1} failed, retrying:`, error);
-          await this.sleep(1e3);
+      let next = 0;
+      let completed = 0;
+      const worker = async () => {
+        while (true) {
+          const idx = next++;
+          if (idx >= batches.length) break;
+          const batch = batches[idx];
+          if (!batch) {
+            console.warn(`Batch ${idx} is undefined, skipping`);
+            continue;
+          }
+          if (idx > 0) {
+            await this.sleep(2e3);
+          }
           try {
             const scored = await this.scoreBatch(batch, openaiService);
             allScored.push(...scored);
-          } catch (retryError) {
-            console.error(`OpenAI batch ${i + 1} failed after retry:`, retryError);
-            throw new Error(`OpenAI batch scoring failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+          } catch (error) {
+            console.warn(`OpenAI batch ${idx + 1} failed, retrying:`, error);
+            await this.sleep(5e3);
+            try {
+              const scored = await this.scoreBatch(batch, openaiService);
+              allScored.push(...scored);
+            } catch (retryError) {
+              console.error(`OpenAI batch ${idx + 1} failed after retry:`, retryError);
+              throw new Error(`OpenAI batch scoring failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+            }
+          } finally {
+            completed++;
+            const progress = 0.4 + completed / batches.length * 0.4;
+            onProgress?.(`OpenAI scoring (batch ${completed}/${batches.length})...`, progress);
           }
         }
-      }
+      };
+      const workers = Array.from(
+        { length: Math.min(CONCURRENCY, batches.length) },
+        () => worker()
+      );
+      await Promise.all(workers);
       return this.normalizeScores(allScored, jobAnalysis.extractedSkills);
     }
     /**
-     * Create batches optimized for OpenAI
+     * Create batches optimized for OpenAI with smaller sizes
      */
     createBatches(jobAnalysis, bullets) {
       const baseTokens = this.estimateBaseTokens(jobAnalysis);
@@ -2918,7 +2996,7 @@ Return ONLY the JSON object, no explanations or additional text.`;
       let currentBatch = [];
       let currentTokens = baseTokens;
       for (const bullet of bullets) {
-        const bulletTokens = bullet.text.length * TOKENS_PER_CHAR + 60;
+        const bulletTokens = bullet.text.length * TOKENS_PER_CHAR + 50;
         if (currentBatch.length >= MIN_BATCH_SIZE && (currentTokens + bulletTokens > MAX_TOKENS_PER_BATCH || currentBatch.length >= MAX_BATCH_SIZE)) {
           batches.push(this.createBatchRequest(jobAnalysis, currentBatch));
           currentBatch = [bullet];
@@ -2934,44 +3012,29 @@ Return ONLY the JSON object, no explanations or additional text.`;
       return batches;
     }
     /**
-     * Score a single batch with OpenAI
+     * Score a single batch with OpenAI - optimized prompts
      */
     async scoreBatch(batch, openaiService) {
-      const systemPrompt = `You are a resume expert helping rank bullet points for job applications.
+      const trimmedDescription = batch.jobDescription.substring(0, MAX_JD_CHARS);
+      const systemPrompt = `You are a resume scoring assistant. For each bullet point, return a score from 1.0 to 10.0 based on relevance to the job.
 
-Rate each bullet point's relevance to the job on a scale of 1.0 to 10.0.
-
-Consider:
-- Direct skill/experience matches
-- Quantified achievements and impact
-- Leadership and cross-functional collaboration
-- Technical depth and complexity
-- Business results and outcomes
-
-Respond with ONLY a JSON object in this exact format:
+STRICT JSON FORMAT REQUIRED - no markdown, no extra text:
 {
   "bullets": [
-    {
-      "id": "exact_id_from_input",
-      "score": 8.5,
-      "reasoning": "Brief explanation under 15 words",
-      "skill_matches": ["list", "of", "matching", "skills"],
-      "quality_flags": ["quantified", "leadership", "technical"]
-    }
+    {"id": "bullet_id", "score": 7.5, "reasoning": "brief reason", "skill_matches": ["skill1"], "quality_flags": ["quantified"]}
   ]
 }`;
-      const userPrompt = `Job Title: ${batch.jobTitle}
+      const userPrompt = `JOB: ${batch.jobTitle}
+SKILLS: ${batch.skills.slice(0, 8).join(", ")}
 
-Job Requirements:
-${batch.jobDescription.substring(0, 1500)}
+DESCRIPTION: ${trimmedDescription}
 
-Required Skills: ${batch.skills.join(", ")}
+RATE THESE BULLETS (return exact JSON format):
+${batch.bullets.map((b, i) => `${i + 1}. ID: ${b.id}
+   ${b.text.substring(0, 150)}...`).join("\n\n")}
 
-Rate these ${batch.bullets.length} bullet points:
-${batch.bullets.map((b) => `ID: ${b.id}
-Text: ${b.text}`).join("\n\n")}
-
-Return JSON with ${batch.bullets.length} scored bullets.`;
+Return JSON with ${batch.bullets.length} items using exact IDs provided.`;
+      const maxTokens = Math.min(400, 50 + batch.bullets.length * 18);
       const response = await openaiService.createChatCompletion({
         model: "gpt-4o-mini",
         // OpenAI model
@@ -2981,9 +3044,12 @@ Return JSON with ${batch.bullets.length} scored bullets.`;
         ],
         temperature: 0.1,
         // Low temperature for consistent scoring
-        max_tokens: 2e3,
-        response_format: { type: "json_object" }
+        max_tokens: maxTokens,
+        // Dynamic cap
+        response_format: { type: "json_object" },
         // OpenAI JSON mode
+        timeoutMs: 25e3
+        // 25 second timeout
       });
       const content = response.choices[0]?.message?.content;
       if (!content) {
@@ -2993,26 +3059,73 @@ Return JSON with ${batch.bullets.length} scored bullets.`;
       return this.convertToScoredBullets(parsed, batch.bullets, batch.originalBullets);
     }
     /**
-     * Parse OpenAI JSON response
+     * Parse OpenAI JSON response with better error handling
      */
     parseOpenAIResponse(content, inputBullets) {
       let parsed;
       try {
-        parsed = JSON.parse(content);
+        let cleanedContent = content.trim();
+        cleanedContent = cleanedContent.replace(/```json\s*/g, "").replace(/```\s*/g, "");
+        const jsonMatch = cleanedContent.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          cleanedContent = jsonMatch[0];
+        }
+        parsed = JSON.parse(cleanedContent);
       } catch (e) {
-        throw new Error(`Invalid JSON from OpenAI: ${e instanceof Error ? e.message : "Parse error"}`);
+        console.error("Failed to parse OpenAI response:", content);
+        console.error("Parse error:", e);
+        return {
+          bullets: inputBullets.map((bullet) => ({
+            id: bullet.id,
+            score: 5,
+            reasoning: "Parse error fallback",
+            skill_matches: [],
+            quality_flags: ["fallback"]
+          }))
+        };
       }
       if (!parsed.bullets || !Array.isArray(parsed.bullets)) {
-        throw new Error("OpenAI response missing bullets array");
+        console.warn("OpenAI response missing bullets array, using fallback");
+        return {
+          bullets: inputBullets.map((bullet) => ({
+            id: bullet.id,
+            score: 5,
+            reasoning: "Missing bullets array",
+            skill_matches: [],
+            quality_flags: ["fallback"]
+          }))
+        };
       }
       if (parsed.bullets.length !== inputBullets.length) {
-        console.warn(`Expected ${inputBullets.length} bullets, got ${parsed.bullets.length}`);
+        console.warn(`Expected ${inputBullets.length} bullets, got ${parsed.bullets.length}. Filling missing ones.`);
+        const resultMap = new Map(parsed.bullets.map((b) => [String(b.id), b]));
+        const completeResults = inputBullets.map((bullet) => {
+          const existing = resultMap.get(String(bullet.id));
+          if (existing && existing.id && typeof existing.score === "number") {
+            return {
+              id: String(existing.id),
+              score: Number(existing.score),
+              reasoning: String(existing.reasoning || "OpenAI response"),
+              skill_matches: Array.isArray(existing.skill_matches) ? existing.skill_matches : [],
+              quality_flags: Array.isArray(existing.quality_flags) ? existing.quality_flags : []
+            };
+          } else {
+            return {
+              id: bullet.id,
+              score: 5,
+              reasoning: "Missing from response",
+              skill_matches: [],
+              quality_flags: ["fallback"]
+            };
+          }
+        });
+        return { bullets: completeResults };
       }
       return parsed;
     }
     /**
-    * Convert OpenAI response to ScoredBullet format - FIXED
-    */
+     * Convert OpenAI response to ScoredBullet format - FIXED
+     */
     convertToScoredBullets(parsed, inputBullets, originalBullets) {
       const results = [];
       for (const bullet of inputBullets) {
@@ -3023,9 +3136,7 @@ Return JSON with ${batch.bullets.length} scored bullets.`;
             bulletId: bullet.id,
             text: bullet.text,
             projectId: originalBullet?.projectId || "",
-            // ✅ Preserve original projectId
             roleId: originalBullet?.roleId || "",
-            // ✅ Preserve original roleId
             score: Math.max(1, Math.min(10, result.score)),
             normalizedScore: 0,
             reasons: result.reasoning || "OpenAI scoring",
@@ -3037,9 +3148,7 @@ Return JSON with ${batch.bullets.length} scored bullets.`;
             bulletId: bullet.id,
             text: bullet.text,
             projectId: originalBullet?.projectId || "",
-            // ✅ Preserve original projectId
             roleId: originalBullet?.roleId || "",
-            // ✅ Preserve original roleId
             score: 5,
             normalizedScore: 0,
             reasons: "OpenAI fallback",
@@ -3075,17 +3184,16 @@ Return JSON with ${batch.bullets.length} scored bullets.`;
         skills: jobAnalysis.extractedSkills,
         bullets: bullets.map((b) => ({ id: b.bulletId, text: b.text })),
         originalBullets: bullets
-        // Include the original bullets
       };
     }
     /**
-     * Estimate base token usage
+     * Estimate base token usage - updated for trimmed prompts
      */
     estimateBaseTokens(jobAnalysis) {
       const titleTokens = jobAnalysis.title.length * TOKENS_PER_CHAR;
-      const descTokens = Math.min(jobAnalysis.description.length * TOKENS_PER_CHAR, 500);
+      const descTokens = Math.min(jobAnalysis.description.length * TOKENS_PER_CHAR, MAX_JD_CHARS * TOKENS_PER_CHAR);
       const skillsTokens = jobAnalysis.extractedSkills.join(",").length * TOKENS_PER_CHAR;
-      const systemPromptTokens = 300;
+      const systemPromptTokens = 250;
       return titleTokens + descTokens + skillsTokens + systemPromptTokens;
     }
     /**
