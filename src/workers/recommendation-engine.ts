@@ -3,8 +3,13 @@
  * AI-powered bullet point recommendations using Claude
  */
 
+/**
+ * Recommendation Engine
+ * AI-powered bullet point recommendations using OpenAI
+ */
+
 import { getAll } from '../storage/transactions';
-import { ClaudeRankingEngine } from './claude-ranking-engine';
+import { OpenAIRankingEngine } from './openai-ranking-engine'; // UPDATED IMPORT
 import type { Role, Project, Bullet, RecommendationResult, RoleResult, BulletResult } from '../types';
 
 // ============================================================================
@@ -12,10 +17,10 @@ import type { Role, Project, Bullet, RecommendationResult, RoleResult, BulletRes
 // ============================================================================
 
 export class RecommendationEngine {
-  private claudeEngine: ClaudeRankingEngine;
+  private openaiEngine: OpenAIRankingEngine; // RENAMED
 
   constructor() {
-    this.claudeEngine = new ClaudeRankingEngine();
+    this.openaiEngine = new OpenAIRankingEngine(); // UPDATED
   }
 
   /**
@@ -44,8 +49,8 @@ export class RecommendationEngine {
       
       onProgress?.('Starting AI analysis...', 0.1);
       
-      // Use Claude ranking engine for the heavy lifting
-      const scoredBullets = await this.claudeEngine.rankBullets(
+      // Use OpenAI ranking engine for the heavy lifting
+      const scoredBullets = await this.openaiEngine.rankBullets(
         jobTitle,
         jobDescription,
         experienceData.bullets,
@@ -71,6 +76,8 @@ export class RecommendationEngine {
       throw new Error(`Recommendation generation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
+
+  // ... rest of the methods remain the same
 
   /**
    * Validate user has experience data

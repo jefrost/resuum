@@ -1,11 +1,13 @@
 /**
  * Claude Batch Scorer
  * Handles Claude API calls for bullet scoring
+ * NOT CURRENTLY IN USE - API Key cannot be used in browser at this time
+ * Kept for future use 
  */
 
-import { getOpenAIService } from './anthropic-service';
+import { getOpenAIService } from './openai-service';
 import type { JobAnalysis } from '../types';
-import type { ScoredBullet } from './claude-ranking-engine';
+import type { ScoredBullet } from './openai-ranking-engine';
 
 // ============================================================================
 // Configuration
@@ -56,7 +58,7 @@ export class ClaudeBatchScorer {
     const anthropicService = getOpenAIService();
     
     if (!anthropicService.hasApiKey()) {
-      throw new Error('Anthropic API key required for Claude scoring');
+      throw new Error('OpenAI API key required for scoring');
     }
 
     const batches = this.createBatches(jobAnalysis, bullets);
